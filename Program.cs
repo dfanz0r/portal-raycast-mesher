@@ -38,7 +38,7 @@ namespace TerrainTool
             string dbPath = cmd.GetOption("db", "terrain.db");
             string objPath = cmd.GetOption("out", "terrain_final.glb");
 
-            Console.WriteLine("=== BATTLEFIELD TERRAIN SOLVER (Full Suite) ===");
+            Console.WriteLine("=== BATTLEFIELD RAYCAST MESHER ===");
 
             // 1. Load Data
             List<Vertex> masterPoints;
