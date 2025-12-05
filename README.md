@@ -50,7 +50,7 @@ meshtool merge user_a.db user_b.db master.db
 
 ### Interactive Mode (Default)
 
-Simply run the executable without arguments. You will be presented with a menu to select an existing database or create a new one.
+**For 99% of users, this is all you need.** Simply run the executable without any arguments. You will be presented with an easy-to-use menu to select an existing database or create a new one. The tool handles everything else automatically.
 
 ```powershell
 .\meshtool.exe
