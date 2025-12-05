@@ -16,6 +16,12 @@ namespace TerrainTool
         {
             var cmd = CommandLineArgs.Parse(args);
 
+            if (cmd.Command == "help" || cmd.HasFlag("help") || cmd.HasFlag("h") || cmd.HasFlag("?"))
+            {
+                ShowHelp();
+                return;
+            }
+
             // Database Recovery Tool Mode
             if (cmd.Command == "merge")
             {
@@ -35,8 +41,13 @@ namespace TerrainTool
             string defaultLogPath = Path.Combine(tempDir, "Battlefieldâ„¢ 6", "PortalLog.txt");
 
             string logPath = cmd.GetOption("log", defaultLogPath);
-            string dbPath = cmd.GetOption("db", "terrain.db");
-            string objPath = cmd.GetOption("out", "terrain_final.glb");
+
+            // Interactive Database Selection
+            string dbPath = ResolveDatabasePath(cmd);
+            string dbName = Path.GetFileNameWithoutExtension(dbPath);
+
+            // Output defaults to db name .glb, unless overridden
+            string objPath = cmd.GetOption("out", $"{dbName}.glb");
 
             Console.WriteLine("=== BATTLEFIELD RAYCAST MESHER ===");
 
@@ -66,7 +77,7 @@ namespace TerrainTool
             }
 
             // 2. Process New Log Data
-            if (File.Exists(logPath))
+            if (!cmd.HasFlag("nolog") && File.Exists(logPath))
             {
                 List<Vertex> newPoints;
                 List<Ray> newMisses;
@@ -95,6 +106,12 @@ namespace TerrainTool
                         Console.WriteLine("[WARN] Could not clear log file.");
                     }
                 }
+            }
+
+            if (cmd.Command == "update")
+            {
+                Console.WriteLine("[DONE] Database updated. Meshing skipped.");
+                return;
             }
 
             if (masterPoints.Count < 3)
@@ -189,6 +206,131 @@ namespace TerrainTool
 
             DatabaseIO.SaveDatabase(pointsA, raysA, pathOut);
             Console.WriteLine($"[MERGE] Integrated {addedPoints} points and {raysB.Count} rays. Total: {pointsA.Count} pts, {raysA.Count} rays. Saved: {pathOut}");
+        }
+
+        static string ResolveDatabasePath(CommandLineArgs cmd)
+        {
+            // 1. Explicit Flag
+            string? explicitDb = cmd.GetOption("db", null);
+            if (!string.IsNullOrEmpty(explicitDb)) return explicitDb;
+
+            // 2. Scan Directory
+            var dbFiles = new DirectoryInfo(Directory.GetCurrentDirectory())
+                .GetFiles("*.db")
+                .OrderByDescending(f => f.LastWriteTime)
+                .ToList();
+
+            if (dbFiles.Count == 0)
+            {
+                return PromptForNewDatabase();
+            }
+
+            // 3. Interactive Menu
+            Console.WriteLine("Select a database to use (Arrow Keys to Move, Enter to Select):");
+            int selection = 0;
+            int totalOptions = dbFiles.Count + 1;
+
+            // Reserve space to prevent scrolling artifacts
+            for (int i = 0; i < totalOptions; i++) Console.WriteLine();
+            int startTop = Console.CursorTop - totalOptions;
+            if (startTop < 0) startTop = 0;
+
+            bool selected = false;
+
+            // Hide cursor
+            Console.CursorVisible = false;
+
+            while (!selected)
+            {
+                Console.SetCursorPosition(0, startTop);
+
+                for (int i = 0; i < totalOptions; i++)
+                {
+                    if (i == selection)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.Write("> ");
+                    }
+                    else
+                    {
+                        Console.Write("  ");
+                    }
+
+                    if (i < dbFiles.Count)
+                    {
+                        Console.WriteLine($"{dbFiles[i].Name,-30} (Last Used: {dbFiles[i].LastWriteTime:g})");
+                    }
+                    else
+                    {
+                        Console.WriteLine("[Create New Database]");
+                    }
+                    Console.ResetColor();
+                }
+
+                var key = Console.ReadKey(true).Key;
+                if (key == ConsoleKey.UpArrow)
+                {
+                    selection--;
+                    if (selection < 0) selection = totalOptions - 1;
+                }
+                else if (key == ConsoleKey.DownArrow)
+                {
+                    selection++;
+                    if (selection >= totalOptions) selection = 0;
+                }
+                else if (key == ConsoleKey.Enter)
+                {
+                    selected = true;
+                }
+            }
+
+            Console.CursorVisible = true;
+            Console.WriteLine(); // New line after selection
+
+            if (selection < dbFiles.Count)
+            {
+                // Update LastWriteTime to mark as recently used
+                try { File.SetLastWriteTime(dbFiles[selection].FullName, DateTime.Now); } catch { }
+                return dbFiles[selection].Name;
+            }
+            else
+            {
+                return PromptForNewDatabase();
+            }
+        }
+
+        static string PromptForNewDatabase()
+        {
+            Console.WriteLine();
+            Console.Write("Enter name for new database (no extension): ");
+            string name = Console.ReadLine()?.Trim() ?? "terrain";
+            if (string.IsNullOrEmpty(name)) name = "terrain";
+            if (!name.EndsWith(".db")) name += ".db";
+            return name;
+        }
+
+        static void ShowHelp()
+        {
+            Console.WriteLine("Battlefield Raycast Mesher - Help");
+            Console.WriteLine("=================================");
+            Console.WriteLine("Usage: meshtool [command] [options]");
+            Console.WriteLine();
+            Console.WriteLine("Commands:");
+            Console.WriteLine("  run (default)   Ingest logs, update database, and generate mesh.");
+            Console.WriteLine("  update          Ingest logs and update database ONLY (skips meshing).");
+            Console.WriteLine("  merge           Merge two databases together.");
+            Console.WriteLine("  help            Show this help message.");
+            Console.WriteLine();
+            Console.WriteLine("Options:");
+            Console.WriteLine("  -db <path>      Specify database file to use (skips menu).");
+            Console.WriteLine("  -log <path>     Specify log file to ingest (default: auto-detected).");
+            Console.WriteLine("  -out <path>     Specify output file (default: <dbname>.glb).");
+            Console.WriteLine("  -nolog          Skip log ingestion step.");
+            Console.WriteLine();
+            Console.WriteLine("Examples:");
+            Console.WriteLine("  meshtool run -db terrain.db");
+            Console.WriteLine("  meshtool update -db terrain.db");
+            Console.WriteLine("  meshtool merge old.db new.db combined.db");
         }
     }
 }
