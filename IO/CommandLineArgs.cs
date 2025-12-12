@@ -47,7 +47,7 @@ namespace TerrainTool.IO
                             index++;
                         }
                     }
-                    
+
                     result._options[key] = value;
                 }
                 else
@@ -59,9 +59,9 @@ namespace TerrainTool.IO
             return result;
         }
 
-        public string? GetOption(string key, string? defaultValue = null)
+        public string GetOption(string key, string defaultValue)
         {
-            return _options.TryGetValue(key, out var val) ? val : defaultValue;
+            return _options.TryGetValue(key, out var val) ? val ?? defaultValue : defaultValue;
         }
 
         public bool HasFlag(string key)

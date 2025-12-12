@@ -3,23 +3,26 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using TerrainTool.Algorithms;
 using TerrainTool.Config;
 using TerrainTool.Data;
 using TerrainTool.IO;
 
+
 namespace TerrainTool
 {
     class Program
     {
-        static void Main(string[] args)
+        static async Task<int> Main(string[] args)
         {
             var cmd = CommandLineArgs.Parse(args);
 
             if (cmd.Command == "help" || cmd.HasFlag("help") || cmd.HasFlag("h") || cmd.HasFlag("?"))
             {
                 ShowHelp();
-                return;
+                return 0;
             }
 
             // Database Recovery Tool Mode
@@ -33,17 +36,30 @@ namespace TerrainTool
                 {
                     Console.WriteLine("Usage: merge <pathA> <pathB> <pathOut>");
                 }
-                return;
+                return 0;
             }
 
-            // Path Detection Logic
-            string tempDir = Path.GetTempPath();
-            string defaultLogPath = Path.Combine(tempDir, "Battlefieldâ„¢ 6", "PortalLog.txt");
-
-            string logPath = cmd.GetOption("log", defaultLogPath);
-
-            // Interactive Database Selection
+            // Paths
+            string logPath = cmd.GetOption("log", ResolveDefaultLogPath());
             string dbPath = ResolveDatabasePath(cmd);
+
+            if (cmd.Command == "monitor")
+            {
+                using var cts = new CancellationTokenSource();
+                Console.CancelKeyPress += (s, e) =>
+                {
+                    e.Cancel = true;
+                    cts.Cancel();
+                };
+
+                Console.WriteLine($"[MONITOR] Log: {logPath}");
+                Console.WriteLine($"[MONITOR] DB:  {dbPath}");
+                Console.WriteLine("[MONITOR] Ctrl+C to stop.");
+
+                await MonitorRunner.RunAsync(logPath, dbPath, cts.Token);
+                return 0;
+            }
+
             string dbName = Path.GetFileNameWithoutExtension(dbPath);
 
             // Output defaults to db name .glb, unless overridden
@@ -111,13 +127,13 @@ namespace TerrainTool
             if (cmd.Command == "update")
             {
                 Console.WriteLine("[DONE] Database updated. Meshing skipped.");
-                return;
+                return 0;
             }
 
             if (masterPoints.Count < 3)
             {
                 Console.WriteLine("[STOP] Not enough points to generate a mesh.");
-                return;
+                return 0;
             }
 
             Stopwatch sw = Stopwatch.StartNew();
@@ -167,10 +183,23 @@ namespace TerrainTool
             {
                 GlbExporter.ExportGlb(allTriangles, objPath);
             }
+            else if (objPath.EndsWith(".xyz", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"[EXPORT] Generating XYZ point cloud for {masterPoints.Count} points...");
+                XyzExporter.ExportXyz(masterPoints, objPath);
+                Console.WriteLine($"[EXPORT] Saved XYZ to {objPath}");
+            }
             else
             {
                 ObjExporter.ExportObj(masterPoints, allTriangles, objPath);
             }
+
+            return 0;
+        }
+
+        static string ResolveDefaultLogPath()
+        {
+            return Path.Combine(Path.GetTempPath(), "Battlefieldâ„¢ 6", "PortalLog.txt");
         }
 
         static void RunMergeTool(string pathA, string pathB, string pathOut)
@@ -211,7 +240,7 @@ namespace TerrainTool
         static string ResolveDatabasePath(CommandLineArgs cmd)
         {
             // 1. Explicit Flag
-            string? explicitDb = cmd.GetOption("db", null);
+            string explicitDb = cmd.GetOption("db", string.Empty);
             if (!string.IsNullOrEmpty(explicitDb)) return explicitDb;
 
             // 2. Scan Directory
@@ -318,18 +347,20 @@ namespace TerrainTool
             Console.WriteLine("Commands:");
             Console.WriteLine("  run (default)   Ingest logs, update database, and generate mesh.");
             Console.WriteLine("  update          Ingest logs and update database ONLY (skips meshing).");
+            Console.WriteLine("  monitor         Tail log continuously and incrementally update the database.");
             Console.WriteLine("  merge           Merge two databases together.");
             Console.WriteLine("  help            Show this help message.");
             Console.WriteLine();
             Console.WriteLine("Options:");
             Console.WriteLine("  -db <path>      Specify database file to use (skips menu).");
             Console.WriteLine("  -log <path>     Specify log file to ingest (default: auto-detected).");
-            Console.WriteLine("  -out <path>     Specify output file (default: <dbname>.glb).");
+            Console.WriteLine("  -out <path>     Specify output file (default: <dbname>.glb). Supports .glb, .obj, .xyz");
             Console.WriteLine("  -nolog          Skip log ingestion step.");
             Console.WriteLine();
             Console.WriteLine("Examples:");
             Console.WriteLine("  meshtool run -db terrain.db");
             Console.WriteLine("  meshtool update -db terrain.db");
+            Console.WriteLine("  meshtool monitor -db terrain.db");
             Console.WriteLine("  meshtool merge old.db new.db combined.db");
         }
     }
