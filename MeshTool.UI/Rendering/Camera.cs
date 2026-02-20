@@ -60,6 +60,25 @@ namespace MeshTool.UI.Rendering
             MoveSpeed = MathF.Max(20.0f, radius * 0.5f);
         }
 
+        public (Vector3D<float> Origin, Vector3D<float> Direction) GetRay(float mouseX, float mouseY, float screenWidth, float screenHeight)
+        {
+            float ndcX = (mouseX / screenWidth) * 2.0f - 1.0f;
+            float ndcY = 1.0f - (mouseY / screenHeight) * 2.0f; // Invert Y
+
+            var proj = GetProjectionMatrix(screenWidth, screenHeight);
+            var view = GetViewMatrix();
+
+            Matrix4X4.Invert(view * proj, out var invViewProj);
+
+            var nearPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, -1.0f, 1.0f), invViewProj);
+            var farPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, 1.0f, 1.0f), invViewProj);
+
+            var near = new Vector3D<float>(nearPoint.X / nearPoint.W, nearPoint.Y / nearPoint.W, nearPoint.Z / nearPoint.W);
+            var far = new Vector3D<float>(farPoint.X / farPoint.W, farPoint.Y / farPoint.W, farPoint.Z / farPoint.W);
+
+            return (near, Vector3D.Normalize(far - near));
+        }
+
         private Vector3D<float> GetForward()
         {
             float x = MathF.Cos(Pitch) * MathF.Cos(Yaw);

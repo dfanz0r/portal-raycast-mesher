@@ -91,17 +91,76 @@ namespace MeshTool.UI.Controls
             base.OnOpenGlDeinit(gl);
         }
 
+        private bool _hoverDirty = true;
+
         protected override void OnOpenGlRender(GlInterface gl, int fb)
         {
             long now = _frameTimer.ElapsedTicks;
             float dt = _lastFrameTicks == 0 ? 0.016f : (float)(now - _lastFrameTicks) / Stopwatch.Frequency;
+            if (dt > 0.1f) dt = 0.1f;
             _lastFrameTicks = now;
 
-            UpdateCameraMovement(dt);
+            bool cameraMoved = UpdateCameraMovement(dt);
             _renderer?.Render(fb, Bounds.Size);
 
-            // Always request next frame to keep animations running
-            RequestNextFrameRendering();
+            if (_hoverDirty)
+            {
+                UpdateHoveredPoint();
+                _hoverDirty = false;
+            }
+
+            bool hasAnimations = _renderer != null && _renderer.HasActiveAnimations();
+
+            if (cameraMoved || hasAnimations || _pressedKeys.Count > 0)
+            {
+                RequestNextFrameRendering();
+            }
+            else
+            {
+                _lastFrameTicks = 0;
+            }
+        }
+
+        private void UpdateHoveredPoint()
+        {
+            if (_points.Count == 0)
+            {
+                UpdateHoveredCoordinate(null);
+                return;
+            }
+
+            var ray = Camera.GetRay((float)_lastMousePos.X, (float)_lastMousePos.Y, (float)Bounds.Width, (float)Bounds.Height);
+
+            float maxAngleCos = MathF.Cos(0.01f); // ~0.57 degrees cone
+            float bestDepth = float.MaxValue;
+            Silk.NET.Maths.Vector3D<float>? bestPoint = null;
+            object lockObj = new object();
+
+            System.Threading.Tasks.Parallel.ForEach(_points, p =>
+            {
+                var toPoint = new Silk.NET.Maths.Vector3D<float>((float)p.Position.X, (float)p.Position.Y, (float)p.Position.Z) - ray.Origin;
+                float depth = Silk.NET.Maths.Vector3D.Dot(toPoint, ray.Direction);
+
+                if (depth > 0 && depth < bestDepth)
+                {
+                    float distSq = toPoint.LengthSquared;
+                    float cosTheta = depth / MathF.Sqrt(distSq);
+
+                    if (cosTheta > maxAngleCos)
+                    {
+                        lock (lockObj)
+                        {
+                            if (depth < bestDepth)
+                            {
+                                bestDepth = depth;
+                                bestPoint = new Silk.NET.Maths.Vector3D<float>((float)p.Position.X, (float)p.Position.Y, (float)p.Position.Z);
+                            }
+                        }
+                    }
+                }
+            });
+
+            UpdateHoveredCoordinate(bestPoint);
         }
 
         public void Invalidate()
@@ -110,11 +169,17 @@ namespace MeshTool.UI.Controls
         }
 
         private Vector3D<float>? _hoveredCoordinate;
+        private List<TerrainTool.Data.Vertex> _points = new List<TerrainTool.Data.Vertex>();
+
         public void UpdateHoveredCoordinate(Vector3D<float>? coord)
         {
             if (_hoveredCoordinate != coord)
             {
                 _hoveredCoordinate = coord;
+                if (_renderer != null)
+                {
+                    _renderer.HoveredCoordinate = coord;
+                }
                 OnHoveredCoordinateChanged?.Invoke(coord);
             }
         }
@@ -123,6 +188,8 @@ namespace MeshTool.UI.Controls
 
         public void LoadData(TerrainTool.Data.Vertex[] points, TerrainTool.Data.Ray[] rays, float avgDistance, bool resetCamera = true)
         {
+            _points.Clear();
+            _points.AddRange(points);
             _renderer?.UpdateData(points, rays, avgDistance);
 
             if ((resetCamera || !_cameraInitialized) && points.Length > 0)
@@ -148,12 +215,15 @@ namespace MeshTool.UI.Controls
                 OnLog?.Invoke("[CAM] Free-cam controls: hold LMB/RMB + move to look, WASD/arrows move, Space/Ctrl up/down, Shift sprint, Wheel speed.");
             }
 
+            _hoverDirty = true;
             Invalidate();
         }
 
         public void AppendData(TerrainTool.Data.Vertex[]? newPoints, TerrainTool.Data.Ray[]? newMisses, float avgDistance)
         {
+            if (newPoints != null) _points.AddRange(newPoints);
             _renderer?.AppendData(newPoints, newMisses, avgDistance);
+            _hoverDirty = true;
             Invalidate();
         }
 
@@ -200,9 +270,11 @@ namespace MeshTool.UI.Controls
             if (_isLooking || pressed)
             {
                 Camera.Look((float)delta.X, (float)delta.Y);
+                _hoverDirty = true;
             }
 
             _lastMousePos = currentPos;
+            _hoverDirty = true;
             Invalidate(); // Always invalidate on mouse move to update hovered coordinate
             e.Handled = true;
         }
@@ -212,6 +284,7 @@ namespace MeshTool.UI.Controls
             base.OnPointerWheelChanged(e);
             Camera.Zoom((float)e.Delta.Y);
             OnMoveSpeedChanged?.Invoke(Camera.MoveSpeed);
+            _hoverDirty = true;
             Invalidate();
             e.Handled = true;
         }
@@ -220,6 +293,7 @@ namespace MeshTool.UI.Controls
         {
             base.OnKeyDown(e);
             _pressedKeys.Add(e.Key);
+            Invalidate();
             e.Handled = true;
         }
 
@@ -227,17 +301,20 @@ namespace MeshTool.UI.Controls
         {
             base.OnKeyUp(e);
             _pressedKeys.Remove(e.Key);
+            Invalidate();
             e.Handled = true;
         }
 
         private void OnTopLevelKeyDown(object? sender, KeyEventArgs e)
         {
             _pressedKeys.Add(e.Key);
+            Invalidate();
         }
 
         private void OnTopLevelKeyUp(object? sender, KeyEventArgs e)
         {
             _pressedKeys.Remove(e.Key);
+            Invalidate();
         }
 
         private void OnTopLevelPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -268,6 +345,7 @@ namespace MeshTool.UI.Controls
             {
                 var delta = currentGlobal - _lastGlobalMousePos;
                 Camera.Look((float)delta.X, (float)delta.Y);
+                _hoverDirty = true;
             }
 
             _lastGlobalMousePos = currentGlobal;
@@ -277,6 +355,7 @@ namespace MeshTool.UI.Controls
             if (local.X >= 0 && local.Y >= 0 && local.X <= Bounds.Width && local.Y <= Bounds.Height)
             {
                 _lastMousePos = local;
+                _hoverDirty = true;
             }
 
             Invalidate();
@@ -287,9 +366,9 @@ namespace MeshTool.UI.Controls
             _isLooking = false;
         }
 
-        private void UpdateCameraMovement(float dt)
+        private bool UpdateCameraMovement(float dt)
         {
-            if (dt <= 0) return;
+            if (dt <= 0) return false;
 
             float forward = 0;
             float right = 0;
@@ -314,7 +393,10 @@ namespace MeshTool.UI.Controls
                 }
 
                 Camera.Move(forward, right, up, dt, sprint);
+                _hoverDirty = true;
+                return true;
             }
+            return false;
         }
     }
 }

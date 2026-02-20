@@ -17,8 +17,6 @@ namespace MeshTool.UI.Rendering
         private uint _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRays;
         private uint _vaoRays, _vboRays;
 
-        private int _pointCount;
-        private int _rayCount; // Number of lines (2 verts each)
         private int _pointCapacity;
         private int _rayCapacity; // Number of lines capacity
         private float _avgDistance = 1.0f;
@@ -34,7 +32,9 @@ namespace MeshTool.UI.Rendering
         private int _msaaWidth;
         private int _msaaHeight;
         private int _msaaSamples = 4;
-        private bool _msaaSupported = true;
+        private float _latestSpawnTime = 0f;
+
+        public Vector3D<float>? HoveredCoordinate { get; set; }
 
         public SceneRenderer(GlInterface glInterface, OpenGlViewport viewport)
         {
@@ -59,13 +59,11 @@ namespace MeshTool.UI.Rendering
                 }
                 else
                 {
-                    _msaaSupported = false;
                     _viewport.OnLog?.Invoke($"[GL] MSAA not supported (MaxSamples = {maxSamples}).");
                 }
             }
             catch (Exception ex)
             {
-                _msaaSupported = false;
                 _viewport.OnLog?.Invoke($"[GL] MSAA check failed: {ex.Message}");
             }
 
@@ -113,6 +111,8 @@ namespace MeshTool.UI.Rendering
                 uniform mat4 uProjection;
                 uniform float uScale;
                 uniform float uCurrentTime;
+                uniform vec3 uHoveredPos;
+                uniform float uHasHovered;
 
                 out vec3 Normal;
                 out vec3 Color;
@@ -130,7 +130,9 @@ namespace MeshTool.UI.Rendering
                     Normal = norm;
                     
                     float age = uCurrentTime - iSpawnTime;
-                    if (iSpawnTime <= 0.0 || age > 5.0 || age < 0.0) {
+                    if (uHasHovered > 0.5 && length(iPos - uHoveredPos) < 0.001) {
+                        Color = vec3(1.0, 0.0, 1.0); // Magenta
+                    } else if (iSpawnTime <= 0.0 || age > 5.0 || age < 0.0) {
                         Color = vec3(0.0, 0.7, 1.0); // Cyan
                     } else {
                         float t = age / 5.0;
@@ -328,6 +330,9 @@ namespace MeshTool.UI.Rendering
         private bool _dataDirty = false;
         private bool _appendDirty = false;
 
+        private int _pointCount;
+        private int _rayCount;
+
         public unsafe void UpdateData(Vertex[] points, TerrainTool.Data.Ray[] rays, float avgDistance)
         {
             _pendingPoints = points;
@@ -337,16 +342,84 @@ namespace MeshTool.UI.Rendering
             _appendDirty = false; // Override any pending appends
             _pendingAppendPointsList.Clear();
             _pendingAppendRaysList.Clear();
+            UpdateLatestSpawnTime(points, rays);
         }
 
         public unsafe void AppendData(Vertex[]? newPoints, TerrainTool.Data.Ray[]? newMisses, float avgDistance)
         {
             if (_dataDirty) return; // If a full update is pending, ignore appends
 
-            if (newPoints != null) _pendingAppendPointsList.AddRange(newPoints);
-            if (newMisses != null) _pendingAppendRaysList.AddRange(newMisses);
+            if (newPoints != null) 
+            {
+                _pendingAppendPointsList.AddRange(newPoints);
+                UpdateLatestSpawnTime(newPoints, null);
+            }
+            if (newMisses != null) 
+            {
+                _pendingAppendRaysList.AddRange(newMisses);
+                UpdateLatestSpawnTime(null, newMisses);
+            }
             _pendingAvgDistance = avgDistance;
             _appendDirty = true;
+        }
+
+        private void UpdateLatestSpawnTime(Vertex[]? points, TerrainTool.Data.Ray[]? rays)
+        {
+            if (points != null)
+            {
+                foreach (var p in points)
+                {
+                    if (p.SpawnTime > _latestSpawnTime) _latestSpawnTime = p.SpawnTime;
+                }
+            }
+            if (rays != null)
+            {
+                foreach (var r in rays)
+                {
+                    if (r.SpawnTime > _latestSpawnTime) _latestSpawnTime = r.SpawnTime;
+                }
+            }
+        }
+
+        public bool HasActiveAnimations()
+        {
+            float currentTime = (float)(Environment.TickCount64 - TerrainTool.IO.LogParser.AppStartTime) / 1000.0f;
+            return (currentTime - _latestSpawnTime) < 5.0f;
+        }
+
+        public struct Frustum
+        {
+            public Vector4D<float>[] Planes;
+
+            public Frustum(Matrix4X4<float> vp)
+            {
+                Planes = new Vector4D<float>[6];
+                Planes[0] = new Vector4D<float>(vp.M14 + vp.M11, vp.M24 + vp.M21, vp.M34 + vp.M31, vp.M44 + vp.M41);
+                Planes[1] = new Vector4D<float>(vp.M14 - vp.M11, vp.M24 - vp.M21, vp.M34 - vp.M31, vp.M44 - vp.M41);
+                Planes[2] = new Vector4D<float>(vp.M14 + vp.M12, vp.M24 + vp.M22, vp.M34 + vp.M32, vp.M44 + vp.M42);
+                Planes[3] = new Vector4D<float>(vp.M14 - vp.M12, vp.M24 - vp.M22, vp.M34 - vp.M32, vp.M44 - vp.M42);
+                Planes[4] = new Vector4D<float>(vp.M14 + vp.M13, vp.M24 + vp.M23, vp.M34 + vp.M33, vp.M44 + vp.M43);
+                Planes[5] = new Vector4D<float>(vp.M14 - vp.M13, vp.M24 - vp.M23, vp.M34 - vp.M33, vp.M44 - vp.M43);
+
+                for (int i = 0; i < 6; i++)
+                {
+                    float length = MathF.Sqrt(Planes[i].X * Planes[i].X + Planes[i].Y * Planes[i].Y + Planes[i].Z * Planes[i].Z);
+                    Planes[i].X /= length;
+                    Planes[i].Y /= length;
+                    Planes[i].Z /= length;
+                    Planes[i].W /= length;
+                }
+            }
+
+            public bool Contains(Vector3D<float> point, float radius)
+            {
+                for (int i = 0; i < 6; i++)
+                {
+                    if (Planes[i].X * point.X + Planes[i].Y * point.Y + Planes[i].Z * point.Z + Planes[i].W <= -radius)
+                        return false;
+                }
+                return true;
+            }
         }
 
         private unsafe void ApplyPendingData()
@@ -721,6 +794,8 @@ namespace MeshTool.UI.Rendering
 
             var view = _viewport.Camera.GetViewMatrix();
             var proj = _viewport.Camera.GetProjectionMatrix((float)width, (float)height);
+            var vp = view * proj;
+
             float currentTime = (float)(Environment.TickCount64 - TerrainTool.IO.LogParser.AppStartTime) / 1000.0f;
 
             // 1. Draw Points
@@ -750,6 +825,18 @@ namespace MeshTool.UI.Rendering
                 int timeLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uCurrentTime");
                 _gl.Uniform1(timeLoc, currentTime);
 
+                int hasHoveredLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uHasHovered");
+                int hoveredPosLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uHoveredPos");
+                if (HoveredCoordinate.HasValue)
+                {
+                    _gl.Uniform1(hasHoveredLoc, 1.0f);
+                    _gl.Uniform3(hoveredPosLoc, (float)HoveredCoordinate.Value.X, (float)HoveredCoordinate.Value.Y, (float)HoveredCoordinate.Value.Z);
+                }
+                else
+                {
+                    _gl.Uniform1(hasHoveredLoc, 0.0f);
+                }
+
                 _gl.BindVertexArray(_vaoSurfels);
                 _gl.DrawArraysInstanced(PrimitiveType.Triangles, 0, (uint)_surfelVertexCount, (uint)_pointCount);
             }
@@ -773,39 +860,6 @@ namespace MeshTool.UI.Rendering
             _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaFbo);
             _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _resolveFbo);
             _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
-
-            // Read depth at mouse position to find hovered coordinate from the Resolve FBO
-            _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _resolveFbo);
-            int mx = (int)_viewport.LastMousePosition.X;
-            int my = (int)(height - _viewport.LastMousePosition.Y); // OpenGL Y is inverted
-
-            if (mx >= 0 && mx < width && my >= 0 && my < height)
-            {
-                float depth;
-                _gl.ReadPixels(mx, my, 1, 1, PixelFormat.DepthComponent, PixelType.Float, &depth);
-
-                if (depth < 1.0f) // 1.0 is clear depth
-                {
-                    // Unproject
-                    var ndc = new Vector3D<float>((mx / (float)width) * 2.0f - 1.0f,
-                                                  (my / (float)height) * 2.0f - 1.0f,
-                                                  depth * 2.0f - 1.0f);
-
-                    Matrix4X4.Invert(view * proj, out var invViewProj);
-                    var worldPos4 = Vector4D.Transform(new Vector4D<float>(ndc.X, ndc.Y, ndc.Z, 1.0f), invViewProj);
-                    var worldPos = new Vector3D<float>(worldPos4.X / worldPos4.W, worldPos4.Y / worldPos4.W, worldPos4.Z / worldPos4.W);
-
-                    _viewport.UpdateHoveredCoordinate(worldPos);
-                }
-                else
-                {
-                    _viewport.UpdateHoveredCoordinate(null);
-                }
-            }
-            else
-            {
-                _viewport.UpdateHoveredCoordinate(null);
-            }
 
             // Blit Resolve FBO to Default FBO
             _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _resolveFbo);
