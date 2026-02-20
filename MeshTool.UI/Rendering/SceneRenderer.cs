@@ -14,8 +14,10 @@ namespace MeshTool.UI.Rendering
         private OpenGlViewport _viewport;
         private uint _vaoPoints, _vboInstances;
         private uint _vaoSurfels, _vboSurfelVerts;
-        private uint _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRays;
+        private uint _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRays, _shaderProgramMesh;
         private uint _vaoRays, _vboRays;
+        private uint _vaoMesh, _vboMesh;
+        private int _meshVertexCount;
 
         private int _pointCapacity;
         private int _rayCapacity; // Number of lines capacity
@@ -220,6 +222,31 @@ namespace MeshTool.UI.Rendering
                     FragColor = vec4(Color, 1.0);
                 }";
             _shaderProgramRays = CreateProgram(vsRay, fsRay);
+
+            // --- MESH SHADER ---
+            string vsMesh = @"#version 300 es
+                precision highp float;
+                layout (location = 0) in vec3 aPos;
+                layout (location = 1) in vec3 aNormal;
+                uniform mat4 uView;
+                uniform mat4 uProjection;
+                out vec3 Normal;
+                void main() {
+                    gl_Position = uProjection * uView * vec4(aPos, 1.0);
+                    Normal = aNormal;
+                }";
+            string fsMesh = @"#version 300 es
+                precision highp float;
+                in vec3 Normal;
+                out vec4 FragColor;
+                void main() {
+                    vec3 n = normalize(Normal);
+                    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
+                    float diff = max(dot(n, lightDir), 0.2);
+                    vec3 color = vec3(0.8, 0.8, 0.8) * diff;
+                    FragColor = vec4(color, 1.0);
+                }";
+            _shaderProgramMesh = CreateProgram(vsMesh, fsMesh);
         }
 
         private unsafe uint CreateProgram(string vsSource, string fsSource)
@@ -330,6 +357,16 @@ namespace MeshTool.UI.Rendering
             _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(6 * sizeof(float)));
             _gl.EnableVertexAttribArray(2);
 
+            // 4. Mesh VAO
+            _vaoMesh = _gl.GenVertexArray();
+            _vboMesh = _gl.GenBuffer();
+            _gl.BindVertexArray(_vaoMesh);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboMesh);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)0);
+            _gl.EnableVertexAttribArray(0);
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+            _gl.EnableVertexAttribArray(1);
+
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
             _gl.BindVertexArray(0);
         }
@@ -347,25 +384,36 @@ namespace MeshTool.UI.Rendering
             _gl.DeleteVertexArray(_vaoPoints);
             _gl.DeleteVertexArray(_vaoSurfels);
             _gl.DeleteVertexArray(_vaoRays);
+            _gl.DeleteVertexArray(_vaoMesh);
             _gl.DeleteBuffer(_vboInstances);
             _gl.DeleteBuffer(_vboSurfelVerts);
             _gl.DeleteBuffer(_vboRays);
+            _gl.DeleteBuffer(_vboMesh);
             _gl.DeleteProgram(_shaderProgramPoints);
             _gl.DeleteProgram(_shaderProgramSurfels);
             _gl.DeleteProgram(_shaderProgramRays);
+            _gl.DeleteProgram(_shaderProgramMesh);
             _gl.Dispose();
         }
 
         private Vertex[]? _pendingPoints;
         private TerrainTool.Data.Ray[]? _pendingRays;
+        private System.Collections.Generic.List<TerrainTool.Data.Triangle>? _pendingMesh;
         private System.Collections.Generic.List<Vertex> _pendingAppendPointsList = new System.Collections.Generic.List<Vertex>();
         private System.Collections.Generic.List<TerrainTool.Data.Ray> _pendingAppendRaysList = new System.Collections.Generic.List<TerrainTool.Data.Ray>();
         private float _pendingAvgDistance;
         private bool _dataDirty = false;
         private bool _appendDirty = false;
+        private bool _meshDirty = false;
 
         private int _pointCount;
         private int _rayCount;
+
+        public unsafe void UpdateMesh(System.Collections.Generic.List<TerrainTool.Data.Triangle>? triangles)
+        {
+            _pendingMesh = triangles;
+            _meshDirty = true;
+        }
 
         public unsafe void UpdateData(Vertex[] points, TerrainTool.Data.Ray[] rays, float avgDistance)
         {
@@ -756,6 +804,68 @@ namespace MeshTool.UI.Rendering
                     _rayCount = newRayCount;
                 }
             }
+
+            if (_meshDirty)
+            {
+                _meshDirty = false;
+                if (_pendingMesh != null)
+                {
+                    _meshVertexCount = _pendingMesh.Count * 3;
+                    if (_meshVertexCount > 0)
+                    {
+                        float[] meshData = new float[_meshVertexCount * 6];
+                        for (int i = 0; i < _pendingMesh.Count; i++)
+                        {
+                            var t = _pendingMesh[i];
+                            var edge1 = t.B.Position - t.A.Position;
+                            var edge2 = t.C.Position - t.A.Position;
+                            var n = edge1.Cross(edge2);
+                            double len = Math.Sqrt(n.X * n.X + n.Y * n.Y + n.Z * n.Z);
+                            if (len > 1e-7)
+                            {
+                                n.X /= len;
+                                n.Y /= len;
+                                n.Z /= len;
+                            }
+                            else
+                            {
+                                n = new TerrainTool.Data.Vector3(0, 1, 0);
+                            }
+
+                            meshData[i * 18 + 0] = (float)t.A.Position.X;
+                            meshData[i * 18 + 1] = (float)t.A.Position.Y;
+                            meshData[i * 18 + 2] = (float)t.A.Position.Z;
+                            meshData[i * 18 + 3] = (float)n.X;
+                            meshData[i * 18 + 4] = (float)n.Y;
+                            meshData[i * 18 + 5] = (float)n.Z;
+
+                            meshData[i * 18 + 6] = (float)t.B.Position.X;
+                            meshData[i * 18 + 7] = (float)t.B.Position.Y;
+                            meshData[i * 18 + 8] = (float)t.B.Position.Z;
+                            meshData[i * 18 + 9] = (float)n.X;
+                            meshData[i * 18 + 10] = (float)n.Y;
+                            meshData[i * 18 + 11] = (float)n.Z;
+
+                            meshData[i * 18 + 12] = (float)t.C.Position.X;
+                            meshData[i * 18 + 13] = (float)t.C.Position.Y;
+                            meshData[i * 18 + 14] = (float)t.C.Position.Z;
+                            meshData[i * 18 + 15] = (float)n.X;
+                            meshData[i * 18 + 16] = (float)n.Y;
+                            meshData[i * 18 + 17] = (float)n.Z;
+                        }
+
+                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboMesh);
+                        fixed (float* v = meshData)
+                        {
+                            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(meshData.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
+                        }
+                    }
+                }
+                else
+                {
+                    _meshVertexCount = 0;
+                }
+            }
         }
 
         public unsafe void Render(int fb, Avalonia.Size bounds)
@@ -890,6 +1000,16 @@ namespace MeshTool.UI.Rendering
 
                 _gl.BindVertexArray(_vaoRays);
                 _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)(_rayCount * 2));
+            }
+
+            // 4. Draw Mesh
+            if (_viewport.ShowMesh && _meshVertexCount > 0)
+            {
+                _gl.UseProgram(_shaderProgramMesh);
+                SetUniforms(_shaderProgramMesh, view, proj);
+
+                _gl.BindVertexArray(_vaoMesh);
+                _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_meshVertexCount);
             }
 
             _gl.BindVertexArray(0);

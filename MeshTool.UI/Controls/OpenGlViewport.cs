@@ -27,6 +27,7 @@ namespace MeshTool.UI.Controls
         public bool ShowPoints { get; set; } = true;
         public bool ShowSurfels { get; set; } = true;
         public bool ShowRays { get; set; } = true;
+        public bool ShowMesh { get; set; } = false;
         public float SurfelScale { get; set; } = 1.0f;
         public Action<string>? OnLog { get; set; }
         public Action<Vector3D<float>?>? OnHoveredCoordinateChanged { get; set; }
@@ -185,6 +186,12 @@ namespace MeshTool.UI.Controls
         }
 
         private bool _cameraInitialized = false;
+
+        public void LoadMesh(List<TerrainTool.Data.Triangle>? triangles)
+        {
+            _renderer?.UpdateMesh(triangles);
+            Invalidate();
+        }
 
         public void LoadData(TerrainTool.Data.Vertex[] points, TerrainTool.Data.Ray[] rays, float avgDistance, bool resetCamera = true)
         {

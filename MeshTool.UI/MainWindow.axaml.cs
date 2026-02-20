@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private readonly System.Collections.ObjectModel.ObservableCollection<string> _dbFiles = new();
 
     private bool _isDbLoaded = false;
+    private System.Collections.Generic.List<TerrainTool.Data.Triangle>? _cachedMesh = null;
 
     public MainWindow()
     {
@@ -95,6 +96,12 @@ public partial class MainWindow : Window
                 _dbPath = selected;
             }
             _isDbLoaded = false;
+            _cachedMesh = null;
+            if (ChkShowMesh != null)
+            {
+                ChkShowMesh.IsChecked = false;
+            }
+            Viewport?.LoadMesh(null);
         }
     }
 
@@ -144,6 +151,12 @@ public partial class MainWindow : Window
             }
             CmbDbPath.SelectedItem = _dbPath;
             _isDbLoaded = false;
+            _cachedMesh = null;
+            if (ChkShowMesh != null)
+            {
+                ChkShowMesh.IsChecked = false;
+            }
+            Viewport?.LoadMesh(null);
         }
     }
 
@@ -179,6 +192,16 @@ public partial class MainWindow : Window
                     DatabaseIO.SaveDatabase(masterPoints, masterMisses, _dbPath);
                     Log($"[MERGE] Added {added} points and {newMisses.Count} misses.");
 
+                    _cachedMesh = null;
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    {
+                        if (ChkShowMesh.IsChecked == true)
+                        {
+                            ChkShowMesh.IsChecked = false;
+                        }
+                        Viewport?.LoadMesh(null);
+                    });
+
                     try
                     {
                         File.WriteAllText(_logPath, string.Empty);
@@ -202,6 +225,129 @@ public partial class MainWindow : Window
         finally
         {
             BtnUpdate.IsEnabled = true;
+        }
+    }
+
+    private async void BtnGenerateMesh_Click(object sender, RoutedEventArgs e)
+    {
+        if (_monitorTask != null)
+        {
+            Log("[ERROR] Stop monitor before generating mesh.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(_dbPath))
+        {
+            Log("[ERROR] Select DB file first.");
+            return;
+        }
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel == null) return;
+
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Save Mesh",
+            DefaultExtension = ".obj",
+            SuggestedFileName = Path.GetFileNameWithoutExtension(_dbPath) + ".obj",
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType("OBJ File") { Patterns = new[] { "*.obj" } },
+                new FilePickerFileType("GLB File") { Patterns = new[] { "*.glb" } },
+                new FilePickerFileType("XYZ Point Cloud") { Patterns = new[] { "*.xyz" } }
+            }
+        });
+
+        if (file == null) return;
+
+        string outPath = file.Path.LocalPath;
+
+        BtnGenerateMesh.IsEnabled = false;
+        PrgProcessing.IsVisible = true;
+        try
+        {
+            await Task.Run(() =>
+            {
+                Log($"[DB] Loading {_dbPath}");
+                DatabaseIO.LoadDatabase(_dbPath, out var masterPoints, out var masterMisses);
+
+                if (masterPoints.Count < 3)
+                {
+                    Log("[ERROR] Not enough points to generate a mesh.");
+                    return;
+                }
+
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+
+                Log("[MESH] Building Adaptive Mesh...");
+                var allTriangles = DelaunayMesher.GenerateMesh(masterPoints);
+
+                if (masterMisses.Count > 0)
+                {
+                    Log("[MESH] Building Triangle Quadtree for acceleration...");
+
+                    double minX = double.MaxValue, maxX = double.MinValue;
+                    double minZ = double.MaxValue, maxZ = double.MinValue;
+                    double minY = double.MaxValue, maxY = double.MinValue;
+
+                    foreach (var p in masterPoints)
+                    {
+                        if (p.Position.X < minX) minX = p.Position.X;
+                        if (p.Position.X > maxX) maxX = p.Position.X;
+                        if (p.Position.Z < minZ) minZ = p.Position.Z;
+                        if (p.Position.Z > maxZ) maxZ = p.Position.Z;
+                        if (p.Position.Y < minY) minY = p.Position.Y;
+                        if (p.Position.Y > maxY) maxY = p.Position.Y;
+                    }
+                    var meshBounds = new TerrainTool.Data.Bounds { MinX = minX, MaxX = maxX, MinZ = minZ, MaxZ = maxZ, MinY = minY, MaxY = maxY };
+
+                    var quadtree = TerrainTool.Data.TriangleQuadtree.Build(allTriangles, meshBounds);
+
+                    Log($"[CARVE] Raycasting {masterMisses.Count} miss rays against the mesh...");
+                    int removed = SpaceCarver.CarveMesh(quadtree, masterMisses);
+                    Log($"[CARVE] Pruned {removed} triangles intersecting empty space.");
+
+                    allTriangles = System.Linq.Enumerable.ToList(System.Linq.Enumerable.Where(allTriangles, t => !t.IsDeleted));
+                }
+
+                Log($"[MESH] Final Triangle Count: {allTriangles.Count}");
+                sw.Stop();
+                Log($"[DONE] Total Processing Time: {sw.Elapsed.TotalSeconds:F2}s");
+
+                _cachedMesh = allTriangles;
+
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (ChkShowMesh.IsChecked == true)
+                    {
+                        Viewport.LoadMesh(_cachedMesh);
+                    }
+                });
+
+                if (outPath.EndsWith(".glb", StringComparison.OrdinalIgnoreCase))
+                {
+                    GlbExporter.ExportGlb(allTriangles, outPath);
+                }
+                else if (outPath.EndsWith(".xyz", StringComparison.OrdinalIgnoreCase))
+                {
+                    Log($"[EXPORT] Generating XYZ point cloud for {masterPoints.Count} points...");
+                    XyzExporter.ExportXyz(masterPoints, outPath);
+                }
+                else
+                {
+                    ObjExporter.ExportObj(masterPoints, allTriangles, outPath);
+                }
+                Log($"[EXPORT] Saved to {outPath}");
+            });
+        }
+        catch (Exception ex)
+        {
+            Log($"[ERROR] {ex.Message}");
+        }
+        finally
+        {
+            BtnGenerateMesh.IsEnabled = true;
+            PrgProcessing.IsVisible = false;
         }
     }
 
@@ -360,6 +506,7 @@ public partial class MainWindow : Window
             BtnUpdate.IsEnabled = true;
             BtnMesh.IsEnabled = true;
             BtnBrowseDb.IsEnabled = true;
+            ChkShowMesh.IsEnabled = true;
             return;
         }
 
@@ -373,6 +520,8 @@ public partial class MainWindow : Window
         BtnUpdate.IsEnabled = false;
         BtnMesh.IsEnabled = false;
         BtnBrowseDb.IsEnabled = false;
+        ChkShowMesh.IsChecked = false;
+        ChkShowMesh.IsEnabled = false;
 
         if (!_isDbLoaded)
         {
@@ -387,6 +536,7 @@ public partial class MainWindow : Window
                 BtnUpdate.IsEnabled = true;
                 BtnMesh.IsEnabled = true;
                 BtnBrowseDb.IsEnabled = true;
+                ChkShowMesh.IsEnabled = true;
                 return;
             }
         }
@@ -420,6 +570,7 @@ public partial class MainWindow : Window
                 BtnUpdate.IsEnabled = true;
                 BtnMesh.IsEnabled = true;
                 BtnBrowseDb.IsEnabled = true;
+                ChkShowMesh.IsEnabled = true;
             });
 
             _monitorTask = null;
@@ -433,6 +584,91 @@ public partial class MainWindow : Window
         Viewport.ShowPoints = ChkShowPoints.IsChecked ?? true;
         Viewport.ShowSurfels = ChkShowSurfels.IsChecked ?? true;
         Viewport.ShowRays = ChkShowRays.IsChecked ?? true;
+        Viewport.Invalidate();
+    }
+
+    private async void ChkShowMesh_Changed(object? sender, RoutedEventArgs e)
+    {
+        bool showMesh = ChkShowMesh.IsChecked ?? false;
+        Viewport.ShowMesh = showMesh;
+
+        if (showMesh && _cachedMesh == null && !string.IsNullOrEmpty(_dbPath))
+        {
+            ChkShowMesh.IsEnabled = false;
+            PrgProcessing.IsVisible = true;
+            try
+            {
+                await Task.Run(() =>
+                {
+                    Log($"[DB] Loading {_dbPath} for mesh preview...");
+                    DatabaseIO.LoadDatabase(_dbPath, out var masterPoints, out var masterMisses);
+
+                    if (masterPoints.Count < 3)
+                    {
+                        Log("[ERROR] Not enough points to generate a mesh.");
+                        return;
+                    }
+
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+                    Log("[MESH] Building Adaptive Mesh...");
+                    var allTriangles = DelaunayMesher.GenerateMesh(masterPoints);
+
+                    if (masterMisses.Count > 0)
+                    {
+                        Log("[MESH] Building Triangle Quadtree for acceleration...");
+
+                        double minX = double.MaxValue, maxX = double.MinValue;
+                        double minZ = double.MaxValue, maxZ = double.MinValue;
+                        double minY = double.MaxValue, maxY = double.MinValue;
+
+                        foreach (var p in masterPoints)
+                        {
+                            if (p.Position.X < minX) minX = p.Position.X;
+                            if (p.Position.X > maxX) maxX = p.Position.X;
+                            if (p.Position.Z < minZ) minZ = p.Position.Z;
+                            if (p.Position.Z > maxZ) maxZ = p.Position.Z;
+                            if (p.Position.Y < minY) minY = p.Position.Y;
+                            if (p.Position.Y > maxY) maxY = p.Position.Y;
+                        }
+                        var meshBounds = new TerrainTool.Data.Bounds { MinX = minX, MaxX = maxX, MinZ = minZ, MaxZ = maxZ, MinY = minY, MaxY = maxY };
+
+                        var quadtree = TerrainTool.Data.TriangleQuadtree.Build(allTriangles, meshBounds);
+
+                        Log($"[CARVE] Raycasting {masterMisses.Count} miss rays against the mesh...");
+                        int removed = SpaceCarver.CarveMesh(quadtree, masterMisses);
+                        Log($"[CARVE] Pruned {removed} triangles intersecting empty space.");
+
+                        allTriangles = System.Linq.Enumerable.ToList(System.Linq.Enumerable.Where(allTriangles, t => !t.IsDeleted));
+                    }
+
+                    Log($"[MESH] Final Triangle Count: {allTriangles.Count}");
+                    sw.Stop();
+                    Log($"[DONE] Total Processing Time: {sw.Elapsed.TotalSeconds:F2}s");
+
+                    _cachedMesh = allTriangles;
+                });
+
+                if (_cachedMesh != null)
+                {
+                    Viewport.LoadMesh(_cachedMesh);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[ERROR] {ex.Message}");
+            }
+            finally
+            {
+                ChkShowMesh.IsEnabled = true;
+                PrgProcessing.IsVisible = false;
+            }
+        }
+        else if (showMesh && _cachedMesh != null)
+        {
+            Viewport.LoadMesh(_cachedMesh);
+        }
+
         Viewport.Invalidate();
     }
 
