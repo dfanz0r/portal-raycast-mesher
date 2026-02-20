@@ -32,7 +32,7 @@ namespace MeshTool.UI.Rendering
             proj.M22 = 1.0f / tanHalfFov;
             proj.M33 = (zFar + zNear) / (zFar - zNear);
             proj.M34 = -1.0f;
-            proj.M43 = -(2.0f * zFar * zNear) / (zFar - zNear);
+            proj.M43 = (2.0f * zFar * zNear) / (zFar - zNear);
             proj.M44 = 0.0f;
 
             return proj;
