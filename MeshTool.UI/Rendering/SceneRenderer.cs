@@ -42,11 +42,34 @@ namespace MeshTool.UI.Rendering
             _gl = GL.GetApi(glInterface.GetProcAddress);
         }
 
+        private delegate void glClearDepthfDelegate(float depth);
+        private glClearDepthfDelegate? _glClearDepthf;
+
         public unsafe void Init()
         {
             _viewport.OnLog?.Invoke($"[GL] Version: {_gl.GetStringS(StringName.Version)}");
             _viewport.OnLog?.Invoke($"[GL] Renderer: {_gl.GetStringS(StringName.Renderer)}");
             _gl.Enable(EnableCap.DepthTest);
+            _gl.DepthFunc(DepthFunction.Greater);
+
+            try
+            {
+                _gl.ClearDepth(0.0);
+            }
+            catch (Exception)
+            {
+                _viewport.OnLog?.Invoke("[GL] ClearDepth failed, falling back to glClearDepthf via context.");
+                if (_gl.Context.TryGetProcAddress("glClearDepthf", out var ptr))
+                {
+                    _viewport.OnLog?.Invoke("[GL] Successfully found glClearDepthf via context.");
+                    _glClearDepthf = Marshal.GetDelegateForFunctionPointer<glClearDepthfDelegate>(ptr);
+                    _glClearDepthf(0.0f);
+                }
+                else
+                {
+                    _viewport.OnLog?.Invoke("[GL] Failed to find glClearDepthf via context.");
+                }
+            }
 
             try
             {
@@ -83,6 +106,15 @@ namespace MeshTool.UI.Rendering
                 out vec3 Normal;
                 void main() {
                     gl_Position = uProjection * uView * vec4(aPos, 1.0);
+                    // Reverse Z: map z from [-1, 1] to [1, 0] for gl_FragDepth
+                    // gl_Position.z is in clip space, after perspective divide it will be in NDC [-1, 1]
+                    // But OpenGL expects depth in [0, 1]. We want near=1, far=0.
+                    // The projection matrix already maps near to 1 and far to -1 in NDC.
+                    // So we need to map NDC [-1, 1] to depth [0, 1].
+                    // Actually, gl_Position.z / gl_Position.w is NDC.
+                    // OpenGL maps NDC z to depth using: depth = (z_ndc + 1) / 2
+                    // If z_ndc is 1 (near), depth = 1. If z_ndc is -1 (far), depth = 0.
+                    // This is exactly what we want for reverse Z!
                     gl_PointSize = 4.0;
                     Normal = aNormal;
                 }";
@@ -127,6 +159,7 @@ namespace MeshTool.UI.Rendering
                     vec3 worldPos = iPos + (tangent * aVertex.x + bitangent * aVertex.z) * uScale;
                     
                     gl_Position = uProjection * uView * vec4(worldPos, 1.0);
+                    // Reverse Z: gl_Position.z is mapped to [1, 0] depth
                     Normal = norm;
                     
                     float age = uCurrentTime - iSpawnTime;
@@ -164,6 +197,7 @@ namespace MeshTool.UI.Rendering
                 out vec3 Color;
                 void main() {
                     gl_Position = uProjection * uView * vec4(aPos, 1.0);
+                    // Reverse Z: gl_Position.z is mapped to [1, 0] depth
                     
                     float age = uCurrentTime - aSpawnTime;
                     if (aSpawnTime <= 0.0 || age > 5.0 || age < 0.0) {
@@ -349,12 +383,12 @@ namespace MeshTool.UI.Rendering
         {
             if (_dataDirty) return; // If a full update is pending, ignore appends
 
-            if (newPoints != null) 
+            if (newPoints != null)
             {
                 _pendingAppendPointsList.AddRange(newPoints);
                 UpdateLatestSpawnTime(newPoints, null);
             }
-            if (newMisses != null) 
+            if (newMisses != null)
             {
                 _pendingAppendRaysList.AddRange(newMisses);
                 UpdateLatestSpawnTime(null, newMisses);
@@ -755,7 +789,7 @@ namespace MeshTool.UI.Rendering
 
                 _msaaDepth = _gl.GenRenderbuffer();
                 _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _msaaDepth);
-                _gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)_msaaSamples, InternalFormat.DepthComponent24, (uint)width, (uint)height);
+                _gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)_msaaSamples, InternalFormat.DepthComponent32f, (uint)width, (uint)height);
                 _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, _msaaDepth);
 
                 var status1 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
@@ -772,7 +806,7 @@ namespace MeshTool.UI.Rendering
 
                 _resolveDepth = _gl.GenTexture();
                 _gl.BindTexture(TextureTarget.Texture2D, _resolveDepth);
-                _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.DepthComponent24, (uint)width, (uint)height, 0, PixelFormat.DepthComponent, PixelType.UnsignedInt, null);
+                _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.DepthComponent32f, (uint)width, (uint)height, 0, PixelFormat.DepthComponent, PixelType.Float, null);
                 _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, _resolveDepth, 0);
 
                 var status2 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
@@ -782,7 +816,11 @@ namespace MeshTool.UI.Rendering
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaFbo);
             _gl.Viewport(0, 0, (uint)width, (uint)height);
             _gl.ClearColor(0.15f, 0.15f, 0.15f, 1.0f);
+            if (_glClearDepthf != null) _glClearDepthf(0.0f);
+            else _gl.ClearDepth(0.0);
             _gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
+            _gl.Enable(EnableCap.DepthTest);
+            _gl.DepthFunc(DepthFunction.Greater);
 
             if (_pointCount == 0 && _rayCount == 0)
             {

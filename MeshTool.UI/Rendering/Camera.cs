@@ -20,7 +20,22 @@ namespace MeshTool.UI.Rendering
         {
             float aspectRatio = width / MathF.Max(1.0f, height);
             float zFar = 100000.0f;
-            return Matrix4X4.CreatePerspectiveFieldOfView(MathF.PI / 3.0f, aspectRatio, 0.1f, zFar);
+            float zNear = 0.1f;
+            float fov = MathF.PI / 3.0f;
+
+            float tanHalfFov = MathF.Tan(fov / 2.0f);
+
+            // OpenGL-style Reverse Z projection matrix
+            // Maps zNear to z_ndc = 1, and zFar to z_ndc = -1
+            var proj = new Matrix4X4<float>();
+            proj.M11 = 1.0f / (aspectRatio * tanHalfFov);
+            proj.M22 = 1.0f / tanHalfFov;
+            proj.M33 = (zFar + zNear) / (zFar - zNear);
+            proj.M34 = -1.0f;
+            proj.M43 = -(2.0f * zFar * zNear) / (zFar - zNear);
+            proj.M44 = 0.0f;
+
+            return proj;
         }
 
         public void Look(float dx, float dy)
@@ -70,8 +85,9 @@ namespace MeshTool.UI.Rendering
 
             Matrix4X4.Invert(view * proj, out var invViewProj);
 
-            var nearPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, -1.0f, 1.0f), invViewProj);
-            var farPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, 1.0f, 1.0f), invViewProj);
+            // Reverse Z: near plane is at z_ndc = 1.0, far plane is at z_ndc = -1.0
+            var nearPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, 1.0f, 1.0f), invViewProj);
+            var farPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, -1.0f, 1.0f), invViewProj);
 
             var near = new Vector3D<float>(nearPoint.X / nearPoint.W, nearPoint.Y / nearPoint.W, nearPoint.Z / nearPoint.W);
             var far = new Vector3D<float>(farPoint.X / farPoint.W, farPoint.Y / farPoint.W, farPoint.Z / farPoint.W);
