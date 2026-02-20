@@ -10,10 +10,47 @@ using TerrainTool.Data;
 
 namespace TerrainTool.IO
 {
+    public sealed class MonitorRunOptions
+    {
+        public bool StartAtEnd { get; init; } = true;
+        public int ChannelCapacity { get; init; } = 8192;
+        public TimeSpan FlushInterval { get; init; } = TimeSpan.FromMilliseconds(200);
+        public int FlushThreshold { get; init; } = 500;
+        public TimeSpan SaveDebounce { get; init; } = TimeSpan.FromSeconds(1);
+        public TimeSpan SaveMinInterval { get; init; } = TimeSpan.FromSeconds(5);
+        public TimeSpan SaveMaxInterval { get; init; } = TimeSpan.FromSeconds(30);
+        public bool IncludeSnapshots { get; init; } = false;
+        public TimeSpan SnapshotMinInterval { get; init; } = TimeSpan.FromMilliseconds(500);
+        public Action<string>? Log { get; init; }
+        public Action<MonitorUpdate>? OnUpdate { get; init; }
+    }
+
+    public readonly record struct MonitorUpdate(
+        int AddedPoints,
+        int AddedMisses,
+        int TotalPoints,
+        int TotalMisses,
+        long ProcessedLines,
+        long ApproxFileLine,
+        float AvgDistance,
+        Vertex[]? PointsSnapshot,
+        Ray[]? MissesSnapshot,
+        Vertex[]? NewPoints,
+        Ray[]? NewMisses,
+        bool IsFinal);
+
     public static class MonitorRunner
     {
         public static async Task RunAsync(string logPath, string dbPath, CancellationToken cancellationToken)
         {
+            await RunAsync(logPath, dbPath, cancellationToken, null);
+        }
+
+        public static async Task RunAsync(string logPath, string dbPath, CancellationToken cancellationToken, MonitorRunOptions? options)
+        {
+            options ??= new MonitorRunOptions();
+            Action<string> log = options.Log ?? Console.WriteLine;
+
             // Load DB snapshot
             List<Vertex> masterPoints;
             List<Ray> masterMisses;
@@ -23,11 +60,11 @@ namespace TerrainTool.IO
                 try
                 {
                     DatabaseIO.LoadDatabase(dbPath, out masterPoints, out masterMisses);
-                    Console.WriteLine($"[DB] Loaded: {masterPoints.Count} points, {masterMisses.Count} rays");
+                    log($"[DB] Loaded: {masterPoints.Count} points, {masterMisses.Count} rays");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[DB] Error loading DB: {ex.Message}. Starting fresh.");
+                    log($"[DB] Error loading DB: {ex.Message}. Starting fresh.");
                     masterPoints = new List<Vertex>();
                     masterMisses = new List<Ray>();
                 }
@@ -36,7 +73,7 @@ namespace TerrainTool.IO
             {
                 masterPoints = new List<Vertex>();
                 masterMisses = new List<Ray>();
-                Console.WriteLine("[DB] No existing database found. Starting fresh.");
+                log("[DB] No existing database found. Starting fresh.");
             }
 
             var gate = new object();
@@ -52,20 +89,17 @@ namespace TerrainTool.IO
             bool dirty = false;
             DateTime lastMutationUtc = DateTime.MinValue;
             DateTime lastSaveUtc = DateTime.MinValue;
+            DateTime lastSnapshotUtc = DateTime.MinValue;
+            float avgDistance = EstimateAverageSpacing(masterPoints);
 
-            // Save throttling
-            TimeSpan saveDebounce = TimeSpan.FromSeconds(1);
-            TimeSpan saveMinInterval = TimeSpan.FromSeconds(5);
-            TimeSpan saveMaxInterval = TimeSpan.FromSeconds(30);
-
-            var lineChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(8192)
+            var lineChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(options.ChannelCapacity)
             {
                 SingleReader = true,
                 SingleWriter = true,
                 FullMode = BoundedChannelFullMode.Wait
             });
 
-            var tailer = new LogTailer(logPath, lineChannel.Writer, startAtEnd: true);
+            var tailer = new LogTailer(logPath, lineChannel.Writer, startAtEnd: options.StartAtEnd);
 
             // Establish a baseline line count that matches the file at the moment we start tailing.
             // This makes the displayed "fileLine" approximate the editor's line count.
@@ -79,6 +113,8 @@ namespace TerrainTool.IO
                 Interlocked.Exchange(ref processedLines, 0);
             };
 
+            EmitUpdate(0, 0, null, null, isFinal: false, forceSnapshot: true);
+
             Task tailTask = Task.Run(() => tailer.RunAsync(cancellationToken), cancellationToken);
 
             Task consumeTask = Task.Run(async () =>
@@ -86,35 +122,58 @@ namespace TerrainTool.IO
                 var pendingHits = new List<Vertex>(512);
                 var pendingMisses = new List<Ray>(512);
                 DateTime lastFlushUtc = DateTime.UtcNow;
-                TimeSpan flushInterval = TimeSpan.FromMilliseconds(200);
-                const int flushThreshold = 500;
+                TimeSpan flushInterval = options.FlushInterval;
+                int flushThreshold = options.FlushThreshold;
 
                 void FlushBatchesIfAny()
                 {
                     if (pendingHits.Count == 0 && pendingMisses.Count == 0) return;
 
+                    int addedPoints = 0;
+                    int addedMisses = pendingMisses.Count;
+                    Vertex[]? newPointsArray = null;
+                    Ray[]? newMissesArray = null;
+
                     lock (gate)
                     {
                         if (pendingHits.Count > 0)
                         {
-                            int added = pointIndex.AddRange(masterPoints, pendingHits);
-                            totalMergedPoints += added;
+                            int startCount = masterPoints.Count;
+                            addedPoints = pointIndex.AddRange(masterPoints, pendingHits);
+                            totalMergedPoints += addedPoints;
                             totalHits += pendingHits.Count;
 
-                            if (added > 0)
+                            if (addedPoints > 0)
                             {
+                                newPointsArray = new Vertex[addedPoints];
+                                masterPoints.CopyTo(startCount, newPointsArray, 0, addedPoints);
+
                                 dirty = true;
                                 lastMutationUtc = DateTime.UtcNow;
+                                // Only recalculate average distance occasionally to prevent lag
+                                if (masterPoints.Count % 5000 < pendingHits.Count)
+                                {
+                                    avgDistance = EstimateAverageSpacing(masterPoints);
+                                }
                             }
                         }
 
                         if (pendingMisses.Count > 0)
                         {
+                            int startCount = masterMisses.Count;
                             masterMisses.AddRange(pendingMisses);
+                            newMissesArray = new Ray[pendingMisses.Count];
+                            masterMisses.CopyTo(startCount, newMissesArray, 0, pendingMisses.Count);
+
                             totalMisses += pendingMisses.Count;
                             dirty = true;
                             lastMutationUtc = DateTime.UtcNow;
                         }
+                    }
+
+                    if (addedPoints > 0 || addedMisses > 0)
+                    {
+                        EmitUpdate(addedPoints, addedMisses, newPointsArray, newMissesArray, isFinal: false, forceSnapshot: false);
                     }
 
                     pendingHits.Clear();
@@ -149,7 +208,7 @@ namespace TerrainTool.IO
                         int p, r;
                         lock (gate) { p = masterPoints.Count; r = masterMisses.Count; }
                         long approxFileLine = baselineFileLines + processedLines;
-                        Console.WriteLine($"[MON] processed={processedLines} fileLine~={approxFileLine} points={p} rays={r} (+{totalMergedPoints} merged)");
+                        log($"[MON] processed={processedLines} fileLine~={approxFileLine} points={p} rays={r} (+{totalMergedPoints} merged)");
                     }
                 }
 
@@ -165,19 +224,22 @@ namespace TerrainTool.IO
 
                     bool didSave = false;
                     int p = 0, r = 0;
+                    Vertex[]? pointsCopy = null;
+                    Ray[]? raysCopy = null;
 
                     lock (gate)
                     {
                         if (!dirty) continue;
 
                         var now = DateTime.UtcNow;
-                        bool debounced = (now - lastMutationUtc) >= saveDebounce;
-                        bool minIntervalOk = lastSaveUtc == DateTime.MinValue || (now - lastSaveUtc) >= saveMinInterval;
-                        bool maxIntervalHit = lastSaveUtc != DateTime.MinValue && (now - lastSaveUtc) >= saveMaxInterval;
+                        bool debounced = (now - lastMutationUtc) >= options.SaveDebounce;
+                        bool minIntervalOk = lastSaveUtc == DateTime.MinValue || (now - lastSaveUtc) >= options.SaveMinInterval;
+                        bool maxIntervalHit = lastSaveUtc != DateTime.MinValue && (now - lastSaveUtc) >= options.SaveMaxInterval;
 
                         if ((debounced && minIntervalOk) || maxIntervalHit)
                         {
-                            SaveDatabaseAtomic(masterPoints, masterMisses, dbPath);
+                            pointsCopy = masterPoints.ToArray();
+                            raysCopy = masterMisses.ToArray();
                             dirty = false;
                             lastSaveUtc = now;
                             p = masterPoints.Count;
@@ -186,8 +248,11 @@ namespace TerrainTool.IO
                         }
                     }
 
-                    if (didSave)
-                        Console.WriteLine($"[DB] Saved: {p} points, {r} rays ({lastSaveUtc:T})");
+                    if (didSave && pointsCopy != null && raysCopy != null)
+                    {
+                        SaveDatabaseAtomic(pointsCopy, raysCopy, dbPath);
+                        log($"[DB] Saved: {p} points, {r} rays ({lastSaveUtc:T})");
+                    }
                 }
             }, cancellationToken);
 
@@ -203,16 +268,92 @@ namespace TerrainTool.IO
             {
                 int finalPoints;
                 int finalRays;
+                Vertex[]? pointsCopy = null;
+                Ray[]? raysCopy = null;
                 lock (gate)
                 {
-                    SaveDatabaseAtomic(masterPoints, masterMisses, dbPath);
+                    pointsCopy = masterPoints.ToArray();
+                    raysCopy = masterMisses.ToArray();
                     finalPoints = masterPoints.Count;
                     finalRays = masterMisses.Count;
                 }
 
-                Console.WriteLine($"[DB] Final save: {finalPoints} points, {finalRays} rays");
-                Console.WriteLine($"[MONITOR] Done. processed={processedLines} fileLine~={baselineFileLines + processedLines} hits={totalHits} misses={totalMisses} mergedPoints={totalMergedPoints}");
+                if (pointsCopy != null && raysCopy != null)
+                {
+                    SaveDatabaseAtomic(pointsCopy, raysCopy, dbPath);
+                }
+
+                EmitUpdate(0, 0, null, null, isFinal: true, forceSnapshot: true);
+                log($"[DB] Final save: {finalPoints} points, {finalRays} rays");
+                log($"[MONITOR] Done. processed={processedLines} fileLine~={baselineFileLines + processedLines} hits={totalHits} misses={totalMisses} mergedPoints={totalMergedPoints}");
             }
+
+            void EmitUpdate(int addedPoints, int addedMisses, Vertex[]? newPointsArray, Ray[]? newMissesArray, bool isFinal, bool forceSnapshot)
+            {
+                if (options.OnUpdate == null) return;
+
+                Vertex[]? points = null;
+                Ray[]? misses = null;
+
+                int totalPoints;
+                int totalMisses;
+                float spacing;
+
+                lock (gate)
+                {
+                    totalPoints = masterPoints.Count;
+                    totalMisses = masterMisses.Count;
+                    spacing = avgDistance;
+
+                    bool snapshotDue = options.IncludeSnapshots && (forceSnapshot || (DateTime.UtcNow - lastSnapshotUtc) >= options.SnapshotMinInterval);
+                    if (snapshotDue)
+                    {
+                        points = masterPoints.ToArray();
+                        misses = masterMisses.ToArray();
+                        lastSnapshotUtc = DateTime.UtcNow;
+                    }
+                }
+
+                long lines = Interlocked.Read(ref processedLines);
+                var update = new MonitorUpdate(
+                    addedPoints,
+                    addedMisses,
+                    totalPoints,
+                    totalMisses,
+                    lines,
+                    baselineFileLines + lines,
+                    spacing,
+                    points,
+                    misses,
+                    newPointsArray,
+                    newMissesArray,
+                    isFinal);
+
+                options.OnUpdate(update);
+            }
+        }
+
+        private static float EstimateAverageSpacing(List<Vertex> points)
+        {
+            if (points.Count < 2) return 1.0f;
+
+            double minX = double.MaxValue, minZ = double.MaxValue;
+            double maxX = double.MinValue, maxZ = double.MinValue;
+
+            foreach (var p in points)
+            {
+                if (p.Position.X < minX) minX = p.Position.X;
+                if (p.Position.X > maxX) maxX = p.Position.X;
+                if (p.Position.Z < minZ) minZ = p.Position.Z;
+                if (p.Position.Z > maxZ) maxZ = p.Position.Z;
+            }
+
+            double dx = Math.Max(1e-3, maxX - minX);
+            double dz = Math.Max(1e-3, maxZ - minZ);
+            double area = dx * dz;
+            double spacing = Math.Sqrt(area / Math.Max(1, points.Count));
+
+            return (float)Math.Clamp(spacing, 0.02, 500.0);
         }
 
         private static long CountFileLinesApprox(string path)
@@ -248,7 +389,7 @@ namespace TerrainTool.IO
             }
         }
 
-        private static void SaveDatabaseAtomic(List<Vertex> points, List<Ray> rays, string path)
+        private static void SaveDatabaseAtomic(IReadOnlyList<Vertex> points, IReadOnlyList<Ray> rays, string path)
         {
             string tmp = path + ".tmp";
             DatabaseIO.SaveDatabase(points, rays, tmp);

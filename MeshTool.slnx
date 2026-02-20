@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="MeshTool.CLI/MeshTool.CLI.csproj" />
+  <Project Path="MeshTool.Core/MeshTool.Core.csproj" />
+  <Project Path="MeshTool.UI/MeshTool.UI.csproj" />
+</Solution>

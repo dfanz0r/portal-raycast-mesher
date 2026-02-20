@@ -65,6 +65,10 @@ namespace TerrainTool.Algorithms
                                     if (distSq < minSq)
                                     {
                                         tooClose = true;
+                                        if (p.SpawnTime > existing.SpawnTime)
+                                        {
+                                            existing.SpawnTime = p.SpawnTime;
+                                        }
                                         goto FoundDuplicate; // Break out of all loops
                                     }
                                 }

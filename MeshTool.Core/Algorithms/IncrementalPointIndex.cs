@@ -34,16 +34,24 @@ namespace TerrainTool.Algorithms
 
         public bool TryAdd(List<Vertex> master, Vertex candidate)
         {
-            if (IsTooClose(candidate))
+            if (IsTooClose(candidate, out var existing))
+            {
+                // Update spawn time of existing point to keep it "fresh"
+                if (existing != null && candidate.SpawnTime > existing.SpawnTime)
+                {
+                    existing.SpawnTime = candidate.SpawnTime;
+                }
                 return false;
+            }
 
             master.Add(candidate);
             AddToGrid(candidate);
             return true;
         }
 
-        private bool IsTooClose(Vertex p)
+        private bool IsTooClose(Vertex p, out Vertex? existingPoint)
         {
+            existingPoint = null;
             int cx = (int)Math.Floor(p.Position.X / _cellSize);
             int cy = (int)Math.Floor(p.Position.Y / _cellSize);
             int cz = (int)Math.Floor(p.Position.Z / _cellSize);
@@ -67,7 +75,10 @@ namespace TerrainTool.Algorithms
                             double distSq = (dxp * dxp) + (dyp * dyp) + (dzp * dzp);
 
                             if (distSq < _minSq)
+                            {
+                                existingPoint = existing;
                                 return true;
+                            }
                         }
                     }
                 }

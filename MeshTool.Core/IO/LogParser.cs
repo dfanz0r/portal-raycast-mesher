@@ -10,6 +10,8 @@ namespace TerrainTool.IO
 {
     public static class LogParser
     {
+        public static readonly long AppStartTime = Environment.TickCount64;
+
         private static readonly Regex s_hitRegex = new Regex(
             @"HIT\|P:\s*([-+]?\d*\.?\d+),([-+]?\d*\.?\d+),([-+]?\d*\.?\d+)\|N:\s*([-+]?\d*\.?\d+),([-+]?\d*\.?\d+),([-+]?\d*\.?\d+)",
             RegexOptions.Compiled);
@@ -49,6 +51,8 @@ namespace TerrainTool.IO
 
             if (string.IsNullOrWhiteSpace(line)) return false;
 
+            float spawnTime = (float)(Environment.TickCount64 - AppStartTime) / 1000.0f;
+
             var m = s_hitRegex.Match(line);
             if (m.Success)
             {
@@ -63,7 +67,8 @@ namespace TerrainTool.IO
                         double.Parse(m.Groups[4].Value, CultureInfo.InvariantCulture),
                         double.Parse(m.Groups[5].Value, CultureInfo.InvariantCulture),
                         double.Parse(m.Groups[6].Value, CultureInfo.InvariantCulture)
-                    )
+                    ),
+                    SpawnTime = spawnTime
                 };
                 return true;
             }
@@ -83,7 +88,8 @@ namespace TerrainTool.IO
                         double.Parse(m.Groups[4].Value, CultureInfo.InvariantCulture),
                         double.Parse(m.Groups[5].Value, CultureInfo.InvariantCulture),
                         double.Parse(m.Groups[6].Value, CultureInfo.InvariantCulture)
-                    )
+                    ),
+                    SpawnTime = spawnTime
                 };
                 return true;
             }

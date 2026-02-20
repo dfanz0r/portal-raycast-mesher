@@ -6,6 +6,7 @@ namespace TerrainTool.Data
     {
         public Vector3 Start; // Start Position
         public Vector3 End;   // End Position
+        public float SpawnTime;
 
         public Vector3 GetDirection(out double length)
         {

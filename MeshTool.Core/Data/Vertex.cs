@@ -5,5 +5,6 @@ namespace TerrainTool.Data
         public int ID;
         public Vector3 Position;
         public Vector3 Normal;
+        public float SpawnTime;
     }
 }
