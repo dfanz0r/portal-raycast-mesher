@@ -1,4 +1,4 @@
-namespace TerrainTool.Data
+namespace MeshTool.Core.Data
 {
     public class Vertex
     {

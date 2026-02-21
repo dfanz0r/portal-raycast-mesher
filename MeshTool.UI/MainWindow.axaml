@@ -27,7 +27,8 @@
                 <!-- Actions -->
                 <Button x:Name="BtnMesh" Content="Load Points &amp; View" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnMesh_Click" Classes="accent"/>
                 <Button x:Name="BtnMonitor" Content="Start Monitor" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnMonitor_Click"/>
-                <Button x:Name="BtnGenerateMesh" Content="Generate Mesh (.obj)" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnGenerateMesh_Click"/>
+                <Button x:Name="BtnGenerateMesh" Content="Generate Mesh" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnGenerateMesh_Click"/>
+                <Button x:Name="BtnSaveMesh" Content="Save Mesh..." HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnSaveMesh_Click" IsEnabled="False"/>
                 <ProgressBar x:Name="PrgProcessing" IsIndeterminate="True" IsVisible="False" Height="4" Margin="0,5,0,0"/>
 
                 <Separator Background="#444" Margin="0,10" Height="2"/>
@@ -39,7 +40,7 @@
                 <CheckBox x:Name="ChkShowSurfels" Content="Show Surfels" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
                 <CheckBox x:Name="ChkShowMissRays" Content="Show Miss Rays" IsChecked="False" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
                 <CheckBox x:Name="ChkShowNormals" Content="Show Ray Normals" IsChecked="False" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
-                <CheckBox x:Name="ChkShowMesh" Content="Show Mesh Preview" IsChecked="False" Checked="ChkShowMesh_Changed" Unchecked="ChkShowMesh_Changed" Foreground="White"/>
+                <CheckBox x:Name="ChkShowMesh" Content="Show Mesh Preview" IsChecked="False" IsEnabled="False" Checked="ChkShowMesh_Changed" Unchecked="ChkShowMesh_Changed" Foreground="White"/>
                 <CheckBox x:Name="ChkShowGrid" Content="Show Grid" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
                 
                 <TextBlock Text="Surfel Size Multiplier" Foreground="LightGray" Margin="0,10,0,0"/>

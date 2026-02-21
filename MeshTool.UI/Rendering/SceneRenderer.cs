@@ -1,8 +1,9 @@
 using Avalonia.OpenGL;
 using Silk.NET.OpenGL;
 using System;
+using System.Buffers;
 using System.Runtime.InteropServices;
-using TerrainTool.Data;
+using MeshTool.Core.Data;
 using Silk.NET.Maths;
 using MeshTool.UI.Controls;
 
@@ -164,9 +165,11 @@ namespace MeshTool.UI.Rendering
 
                 void main() {
                     vec3 norm = normalize(iNormal);
-                    vec3 helper = abs(norm.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-                    vec3 tangent = normalize(cross(helper, norm));
-                    vec3 bitangent = normalize(cross(norm, tangent));
+                    float s = norm.z >= 0.0 ? 1.0 : -1.0;
+                    float a = -1.0 / (s + norm.z);
+                    float b = norm.x * norm.y * a;
+                    vec3 tangent = normalize(vec3(1.0 + s * norm.x * norm.x * a, s * b, -s * norm.x));
+                    vec3 bitangent = normalize(vec3(b, s + norm.y * norm.y * a, -norm.y));
                     
                     // aVertex is unit disk in XZ plane, so X->tangent and Z->bitangent
                     vec3 worldPos = iPos + (tangent * aVertex.x + bitangent * aVertex.z) * uScale;
@@ -684,57 +687,91 @@ namespace MeshTool.UI.Rendering
             _gl.Dispose();
         }
 
-        private Vertex[]? _pendingPoints;
-        private TerrainTool.Data.Ray[]? _pendingRays;
-        private System.Collections.Generic.List<TerrainTool.Data.Triangle>? _pendingMesh;
-        private System.Collections.Generic.List<Vertex> _pendingAppendPointsList = new System.Collections.Generic.List<Vertex>();
-        private System.Collections.Generic.List<TerrainTool.Data.Ray> _pendingAppendRaysList = new System.Collections.Generic.List<TerrainTool.Data.Ray>();
+        private MeshTool.Core.Data.Vertex[]? _pendingPoints;
+        private MeshTool.Core.Data.Ray[]? _pendingRays;
+        private System.Collections.Generic.List<MeshTool.Core.Data.Triangle>? _pendingMesh;
+        private float[]? _pendingMeshRawBuffer;
+        private int _pendingMeshRawVertexCount;
+        private System.Collections.Generic.List<MeshTool.Core.Data.Vertex> _pendingAppendPointsList = new System.Collections.Generic.List<MeshTool.Core.Data.Vertex>();
+        private System.Collections.Generic.List<MeshTool.Core.Data.Ray> _pendingAppendRaysList = new System.Collections.Generic.List<MeshTool.Core.Data.Ray>();
         private float _pendingAvgDistance;
         private bool _dataDirty = false;
         private bool _appendDirty = false;
         private bool _meshDirty = false;
+        private bool _meshRawDirty = false;
+        private readonly object _pendingLock = new object();
 
         private int _pointCount;
         private int _rayCount;
         private int _missRayCount;
 
-        public unsafe void UpdateMesh(System.Collections.Generic.List<TerrainTool.Data.Triangle>? triangles)
+        public bool IsMeshUpdatePending
         {
-            _pendingMesh = triangles;
-            _meshDirty = true;
+            get { lock (_pendingLock) return _meshDirty || _meshRawDirty; }
         }
 
-        public unsafe void UpdateData(Vertex[] points, TerrainTool.Data.Ray[] rays, float avgDistance)
+        public unsafe void UpdateMesh(System.Collections.Generic.List<MeshTool.Core.Data.Triangle>? triangles)
         {
-            _pendingPoints = points;
-            _pendingRays = rays;
-            _pendingAvgDistance = avgDistance;
-            _dataDirty = true;
-            _appendDirty = false; // Override any pending appends
-            _pendingAppendPointsList.Clear();
-            _pendingAppendRaysList.Clear();
+            lock (_pendingLock)
+            {
+                _pendingMesh = triangles;
+                _meshDirty = true;
+                _meshRawDirty = false;
+            }
+        }
+
+        public unsafe void UpdateMeshRaw(float[] buffer, int vertexCount)
+        {
+            lock (_pendingLock)
+            {
+                if (_pendingMeshRawBuffer != null)
+                {
+                    ArrayPool<float>.Shared.Return(_pendingMeshRawBuffer);
+                }
+                _pendingMeshRawBuffer = buffer;
+                _pendingMeshRawVertexCount = vertexCount;
+                _meshRawDirty = true;
+                _meshDirty = false;
+            }
+        }
+
+        public unsafe void UpdateData(Vertex[] points, MeshTool.Core.Data.Ray[] rays, float avgDistance)
+        {
+            lock (_pendingLock)
+            {
+                _pendingPoints = points;
+                _pendingRays = rays;
+                _pendingAvgDistance = avgDistance;
+                _dataDirty = true;
+                _appendDirty = false; // Override any pending appends
+                _pendingAppendPointsList.Clear();
+                _pendingAppendRaysList.Clear();
+            }
             UpdateLatestSpawnTime(points, rays);
         }
 
-        public unsafe void AppendData(Vertex[]? newPoints, TerrainTool.Data.Ray[]? newMisses, float avgDistance)
+        public unsafe void AppendData(Vertex[]? newPoints, MeshTool.Core.Data.Ray[]? newMisses, float avgDistance)
         {
-            if (_dataDirty) return; // If a full update is pending, ignore appends
+            lock (_pendingLock)
+            {
+                if (_dataDirty) return; // If a full update is pending, ignore appends
 
-            if (newPoints != null)
-            {
-                _pendingAppendPointsList.AddRange(newPoints);
-                UpdateLatestSpawnTime(newPoints, null);
+                if (newPoints != null)
+                {
+                    _pendingAppendPointsList.AddRange(newPoints);
+                }
+                if (newMisses != null)
+                {
+                    _pendingAppendRaysList.AddRange(newMisses);
+                }
+                _pendingAvgDistance = avgDistance;
+                _appendDirty = true;
             }
-            if (newMisses != null)
-            {
-                _pendingAppendRaysList.AddRange(newMisses);
-                UpdateLatestSpawnTime(null, newMisses);
-            }
-            _pendingAvgDistance = avgDistance;
-            _appendDirty = true;
+
+            UpdateLatestSpawnTime(newPoints, newMisses);
         }
 
-        private void UpdateLatestSpawnTime(Vertex[]? points, TerrainTool.Data.Ray[]? rays)
+        private void UpdateLatestSpawnTime(Vertex[]? points, MeshTool.Core.Data.Ray[]? rays)
         {
             if (points != null)
             {
@@ -754,7 +791,7 @@ namespace MeshTool.UI.Rendering
 
         public bool HasActiveAnimations()
         {
-            float currentTime = (float)(Environment.TickCount64 - TerrainTool.IO.LogParser.AppStartTime) / 1000.0f;
+            float currentTime = (float)(Environment.TickCount64 - MeshTool.Core.IO.LogParser.AppStartTime) / 1000.0f;
             return (currentTime - _latestSpawnTime) < 5.0f;
         }
 
@@ -795,14 +832,67 @@ namespace MeshTool.UI.Rendering
 
         private unsafe void ApplyPendingData()
         {
-            if (_dataDirty)
-            {
-                _dataDirty = false;
-                if (_pendingPoints == null || _pendingRays == null) return;
+            Vertex[]? pendingPoints = null;
+            MeshTool.Core.Data.Ray[]? pendingRays = null;
+            Vertex[] newPoints = Array.Empty<Vertex>();
+            MeshTool.Core.Data.Ray[] newMisses = Array.Empty<MeshTool.Core.Data.Ray>();
+            System.Collections.Generic.List<MeshTool.Core.Data.Triangle>? pendingMesh = null;
+            float pendingAvgDistance = 0f;
 
-                Vertex[] points = _pendingPoints;
-                TerrainTool.Data.Ray[] rays = _pendingRays;
-                _avgDistance = _pendingAvgDistance;
+            bool doFullUpdate = false;
+            bool doAppend = false;
+            bool doMesh = false;
+
+            lock (_pendingLock)
+            {
+                if (_dataDirty)
+                {
+                    _dataDirty = false;
+                    pendingPoints = _pendingPoints;
+                    pendingRays = _pendingRays;
+                    pendingAvgDistance = _pendingAvgDistance;
+                    doFullUpdate = pendingPoints != null && pendingRays != null;
+                }
+                else if (_appendDirty)
+                {
+                    _appendDirty = false;
+                    newPoints = _pendingAppendPointsList.ToArray();
+                    newMisses = _pendingAppendRaysList.ToArray();
+                    _pendingAppendPointsList.Clear();
+                    _pendingAppendRaysList.Clear();
+                    pendingAvgDistance = _pendingAvgDistance;
+                    doAppend = true;
+                }
+
+                if (_meshDirty)
+                {
+                    _meshDirty = false;
+                    pendingMesh = _pendingMesh;
+                    doMesh = true;
+                }
+                else if (_meshRawDirty)
+                {
+                    _meshRawDirty = false;
+                    
+                    if (_pendingMeshRawBuffer != null)
+                    {
+                        _meshVertexCount = _pendingMeshRawVertexCount;
+                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboMesh);
+                        fixed (float* v = _pendingMeshRawBuffer)
+                        {
+                            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_meshVertexCount * 6 * sizeof(float)), v, BufferUsageARB.StaticDraw);
+                        }
+                        ArrayPool<float>.Shared.Return(_pendingMeshRawBuffer);
+                        _pendingMeshRawBuffer = null;
+                    }
+                }
+            }
+
+            if (doFullUpdate)
+            {
+                Vertex[] points = pendingPoints!;
+                MeshTool.Core.Data.Ray[] rays = pendingRays!;
+                _avgDistance = pendingAvgDistance;
 
                 _pointCount = points.Length;
                 _missRayCount = rays.Length;
@@ -818,39 +908,47 @@ namespace MeshTool.UI.Rendering
                 if (_pointCount > 0)
                 {
                     Console.WriteLine($"[GL] Uploading {_pointCount} points to GPU...");
-                    float[] vertices = new float[_pointCount * 7];
-                    for (int i = 0; i < _pointCount; i++)
+                    int pointFloatCount = _pointCount * 7;
+                    float[] vertices = ArrayPool<float>.Shared.Rent(pointFloatCount);
+                    try
                     {
-                        float nx = (float)points[i].Normal.X;
-                        float ny = (float)points[i].Normal.Y;
-                        float nz = (float)points[i].Normal.Z;
-                        float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
-                        if (nLen > 0.00001f)
+                        for (int i = 0; i < _pointCount; i++)
                         {
-                            nx /= nLen;
-                            ny /= nLen;
-                            nz /= nLen;
-                        }
-                        else
-                        {
-                            nx = 0f;
-                            ny = 1f;
-                            nz = 0f;
+                            float nx = (float)points[i].Normal.X;
+                            float ny = (float)points[i].Normal.Y;
+                            float nz = (float)points[i].Normal.Z;
+                            float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
+                            if (nLen > 0.00001f)
+                            {
+                                nx /= nLen;
+                                ny /= nLen;
+                                nz /= nLen;
+                            }
+                            else
+                            {
+                                nx = 0f;
+                                ny = 1f;
+                                nz = 0f;
+                            }
+
+                            vertices[i * 7 + 0] = (float)points[i].Position.X;
+                            vertices[i * 7 + 1] = (float)points[i].Position.Y;
+                            vertices[i * 7 + 2] = (float)points[i].Position.Z;
+                            vertices[i * 7 + 3] = nx;
+                            vertices[i * 7 + 4] = ny;
+                            vertices[i * 7 + 5] = nz;
+                            vertices[i * 7 + 6] = points[i].SpawnTime;
                         }
 
-                        vertices[i * 7 + 0] = (float)points[i].Position.X;
-                        vertices[i * 7 + 1] = (float)points[i].Position.Y;
-                        vertices[i * 7 + 2] = (float)points[i].Position.Z;
-                        vertices[i * 7 + 3] = nx;
-                        vertices[i * 7 + 4] = ny;
-                        vertices[i * 7 + 5] = nz;
-                        vertices[i * 7 + 6] = points[i].SpawnTime;
+                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
+                        fixed (float* v = vertices)
+                        {
+                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(pointFloatCount * sizeof(float)), v);
+                        }
                     }
-
-                    _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                    fixed (float* v = vertices)
+                    finally
                     {
-                        _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(vertices.Length * sizeof(float)), v);
+                        ArrayPool<float>.Shared.Return(vertices);
                     }
                 }
 
@@ -863,74 +961,74 @@ namespace MeshTool.UI.Rendering
 
                 if (_rayCount > 0)
                 {
-                    float[] rayData = new float[_rayCount * 14]; // 2 verts * 7 floats
-
-                    // Miss rays (Red)
-                    for (int i = 0; i < rays.Length; i++)
+                    int rayFloatCount = _rayCount * 14;
+                    float[] rayData = ArrayPool<float>.Shared.Rent(rayFloatCount);
+                    try
                     {
-                        int idx = i * 14;
-                        rayData[idx + 0] = (float)rays[i].Start.X; rayData[idx + 1] = (float)rays[i].Start.Y; rayData[idx + 2] = (float)rays[i].Start.Z;
-                        rayData[idx + 3] = 1f; rayData[idx + 4] = 0f; rayData[idx + 5] = 0f;
-                        rayData[idx + 6] = rays[i].SpawnTime;
-
-                        rayData[idx + 7] = (float)rays[i].End.X; rayData[idx + 8] = (float)rays[i].End.Y; rayData[idx + 9] = (float)rays[i].End.Z;
-                        rayData[idx + 10] = 1f; rayData[idx + 11] = 0f; rayData[idx + 12] = 0f;
-                        rayData[idx + 13] = rays[i].SpawnTime;
-                    }
-
-                    // Point normals (Yellow)
-                    int offset = rays.Length * 14;
-                    float normalLen = _avgDistance * 1.5f;
-                    for (int i = 0; i < _pointCount; i++)
-                    {
-                        int idx = offset + i * 14;
-                        float px = (float)points[i].Position.X;
-                        float py = (float)points[i].Position.Y;
-                        float pz = (float)points[i].Position.Z;
-
-                        float nx = (float)points[i].Normal.X;
-                        float ny = (float)points[i].Normal.Y;
-                        float nz = (float)points[i].Normal.Z;
-                        float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
-                        if (nLen > 0.00001f)
+                        // Miss rays (Red)
+                        for (int i = 0; i < rays.Length; i++)
                         {
-                            nx /= nLen;
-                            ny /= nLen;
-                            nz /= nLen;
-                        }
-                        else
-                        {
-                            nx = 0f;
-                            ny = 1f;
-                            nz = 0f;
+                            int idx = i * 14;
+                            rayData[idx + 0] = (float)rays[i].Start.X; rayData[idx + 1] = (float)rays[i].Start.Y; rayData[idx + 2] = (float)rays[i].Start.Z;
+                            rayData[idx + 3] = 1f; rayData[idx + 4] = 0f; rayData[idx + 5] = 0f;
+                            rayData[idx + 6] = rays[i].SpawnTime;
+
+                            rayData[idx + 7] = (float)rays[i].End.X; rayData[idx + 8] = (float)rays[i].End.Y; rayData[idx + 9] = (float)rays[i].End.Z;
+                            rayData[idx + 10] = 1f; rayData[idx + 11] = 0f; rayData[idx + 12] = 0f;
+                            rayData[idx + 13] = rays[i].SpawnTime;
                         }
 
-                        rayData[idx + 0] = px; rayData[idx + 1] = py; rayData[idx + 2] = pz;
-                        rayData[idx + 3] = 1f; rayData[idx + 4] = 1f; rayData[idx + 5] = 0f; // Yellow
-                        rayData[idx + 6] = 0f; // No animation for normals
+                        // Point normals (Yellow)
+                        int offset = rays.Length * 14;
+                        float normalLen = _avgDistance * 1.5f;
+                        for (int i = 0; i < _pointCount; i++)
+                        {
+                            int idx = offset + i * 14;
+                            float px = (float)points[i].Position.X;
+                            float py = (float)points[i].Position.Y;
+                            float pz = (float)points[i].Position.Z;
 
-                        rayData[idx + 7] = px + nx * normalLen; rayData[idx + 8] = py + ny * normalLen; rayData[idx + 9] = pz + nz * normalLen;
-                        rayData[idx + 10] = 1f; rayData[idx + 11] = 1f; rayData[idx + 12] = 0f; // Yellow
-                        rayData[idx + 13] = 0f; // No animation for normals
+                            float nx = (float)points[i].Normal.X;
+                            float ny = (float)points[i].Normal.Y;
+                            float nz = (float)points[i].Normal.Z;
+                            float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
+                            if (nLen > 0.00001f)
+                            {
+                                nx /= nLen;
+                                ny /= nLen;
+                                nz /= nLen;
+                            }
+                            else
+                            {
+                                nx = 0f;
+                                ny = 1f;
+                                nz = 0f;
+                            }
+
+                            rayData[idx + 0] = px; rayData[idx + 1] = py; rayData[idx + 2] = pz;
+                            rayData[idx + 3] = 1f; rayData[idx + 4] = 1f; rayData[idx + 5] = 0f;
+                            rayData[idx + 6] = 0f;
+
+                            rayData[idx + 7] = px + nx * normalLen; rayData[idx + 8] = py + ny * normalLen; rayData[idx + 9] = pz + nz * normalLen;
+                            rayData[idx + 10] = 1f; rayData[idx + 11] = 1f; rayData[idx + 12] = 0f;
+                            rayData[idx + 13] = 0f;
+                        }
+
+                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
+                        fixed (float* v = rayData)
+                        {
+                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(rayFloatCount * sizeof(float)), v);
+                        }
                     }
-
-                    _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-                    fixed (float* v = rayData)
+                    finally
                     {
-                        _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(rayData.Length * sizeof(float)), v);
+                        ArrayPool<float>.Shared.Return(rayData);
                     }
                 }
             }
-            else if (_appendDirty)
+            else if (doAppend)
             {
-                _appendDirty = false;
-
-                Vertex[] newPoints = _pendingAppendPointsList.ToArray();
-                TerrainTool.Data.Ray[] newMisses = _pendingAppendRaysList.ToArray();
-                _pendingAppendPointsList.Clear();
-                _pendingAppendRaysList.Clear();
-
-                _avgDistance = _pendingAvgDistance;
+                _avgDistance = pendingAvgDistance;
 
                 int addedPoints = newPoints.Length;
                 int addedMisses = newMisses.Length;
@@ -968,9 +1066,12 @@ namespace MeshTool.UI.Rendering
                         _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(6 * sizeof(float)));
                     }
 
-                    float[] vertices = new float[addedPoints * 7];
-                    for (int i = 0; i < addedPoints; i++)
+                    int pointFloatCount = addedPoints * 7;
+                    float[] vertices = ArrayPool<float>.Shared.Rent(pointFloatCount);
+                    try
                     {
+                        for (int i = 0; i < addedPoints; i++)
+                        {
                         float nx = (float)newPoints![i].Normal.X;
                         float ny = (float)newPoints[i].Normal.Y;
                         float nz = (float)newPoints[i].Normal.Z;
@@ -994,13 +1095,18 @@ namespace MeshTool.UI.Rendering
                         vertices[i * 7 + 3] = nx;
                         vertices[i * 7 + 4] = ny;
                         vertices[i * 7 + 5] = nz;
-                        vertices[i * 7 + 6] = newPoints[i].SpawnTime;
-                    }
+                            vertices[i * 7 + 6] = newPoints[i].SpawnTime;
+                        }
 
-                    _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                    fixed (float* v = vertices)
+                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
+                        fixed (float* v = vertices)
+                        {
+                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(_pointCount * 7 * sizeof(float)), (nuint)(pointFloatCount * sizeof(float)), v);
+                        }
+                    }
+                    finally
                     {
-                        _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(_pointCount * 7 * sizeof(float)), (nuint)(vertices.Length * sizeof(float)), v);
+                        ArrayPool<float>.Shared.Return(vertices);
                     }
                     _pointCount = newPointCount;
                 }
@@ -1030,13 +1136,16 @@ namespace MeshTool.UI.Rendering
                         _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(6 * sizeof(float)));
                     }
 
-                    float[] rayData = new float[addedRays * 14];
-                    int offset = 0;
-
-                    if (addedMisses > 0)
+                    int rayFloatCount = addedRays * 14;
+                    float[] rayData = ArrayPool<float>.Shared.Rent(rayFloatCount);
+                    try
                     {
-                        for (int i = 0; i < addedMisses; i++)
+                        int offset = 0;
+
+                        if (addedMisses > 0)
                         {
+                            for (int i = 0; i < addedMisses; i++)
+                            {
                             int idx = offset + i * 14;
                             rayData[idx + 0] = (float)newMisses![i].Start.X; rayData[idx + 1] = (float)newMisses[i].Start.Y; rayData[idx + 2] = (float)newMisses[i].Start.Z;
                             rayData[idx + 3] = 1f; rayData[idx + 4] = 0f; rayData[idx + 5] = 0f;
@@ -1045,15 +1154,15 @@ namespace MeshTool.UI.Rendering
                             rayData[idx + 7] = (float)newMisses[i].End.X; rayData[idx + 8] = (float)newMisses[i].End.Y; rayData[idx + 9] = (float)newMisses[i].End.Z;
                             rayData[idx + 10] = 1f; rayData[idx + 11] = 0f; rayData[idx + 12] = 0f;
                             rayData[idx + 13] = newMisses[i].SpawnTime;
+                            }
+                            offset += addedMisses * 14;
                         }
-                        offset += addedMisses * 14;
-                    }
 
-                    if (addedPoints > 0)
-                    {
-                        float normalLen = _avgDistance * 1.5f;
-                        for (int i = 0; i < addedPoints; i++)
+                        if (addedPoints > 0)
                         {
+                            float normalLen = _avgDistance * 1.5f;
+                            for (int i = 0; i < addedPoints; i++)
+                            {
                             int idx = offset + i * 14;
                             float px = (float)newPoints![i].Position.X;
                             float py = (float)newPoints[i].Position.Y;
@@ -1083,31 +1192,38 @@ namespace MeshTool.UI.Rendering
                             rayData[idx + 7] = px + nx * normalLen; rayData[idx + 8] = py + ny * normalLen; rayData[idx + 9] = pz + nz * normalLen;
                             rayData[idx + 10] = 1f; rayData[idx + 11] = 1f; rayData[idx + 12] = 0f;
                             rayData[idx + 13] = 0f;
+                            }
+                        }
+
+                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
+                        fixed (float* v = rayData)
+                        {
+                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(_rayCount * 14 * sizeof(float)), (nuint)(rayFloatCount * sizeof(float)), v);
                         }
                     }
-
-                    _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-                    fixed (float* v = rayData)
+                    finally
                     {
-                        _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(_rayCount * 14 * sizeof(float)), (nuint)(rayData.Length * sizeof(float)), v);
+                        ArrayPool<float>.Shared.Return(rayData);
                     }
                     _rayCount = newRayCount;
                     _missRayCount += addedMisses;
                 }
             }
 
-            if (_meshDirty)
+            if (doMesh)
             {
-                _meshDirty = false;
-                if (_pendingMesh != null)
+                if (pendingMesh != null)
                 {
-                    _meshVertexCount = _pendingMesh.Count * 3;
+                    _meshVertexCount = pendingMesh.Count * 3;
                     if (_meshVertexCount > 0)
                     {
-                        float[] meshData = new float[_meshVertexCount * 6];
-                        for (int i = 0; i < _pendingMesh.Count; i++)
+                        int meshFloatCount = _meshVertexCount * 6;
+                        float[] meshData = ArrayPool<float>.Shared.Rent(meshFloatCount);
+                        try
                         {
-                            var t = _pendingMesh[i];
+                            for (int i = 0; i < pendingMesh.Count; i++)
+                            {
+                                var t = pendingMesh[i];
                             var edge1 = t.B.Position - t.A.Position;
                             var edge2 = t.C.Position - t.A.Position;
                             var n = edge1.Cross(edge2);
@@ -1120,7 +1236,7 @@ namespace MeshTool.UI.Rendering
                             }
                             else
                             {
-                                n = new TerrainTool.Data.Vector3(0, 1, 0);
+                                n = new MeshTool.Core.Data.Vector3(0, 1, 0);
                             }
 
                             meshData[i * 18 + 0] = (float)t.A.Position.X;
@@ -1142,13 +1258,18 @@ namespace MeshTool.UI.Rendering
                             meshData[i * 18 + 14] = (float)t.C.Position.Z;
                             meshData[i * 18 + 15] = (float)n.X;
                             meshData[i * 18 + 16] = (float)n.Y;
-                            meshData[i * 18 + 17] = (float)n.Z;
-                        }
+                                meshData[i * 18 + 17] = (float)n.Z;
+                            }
 
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboMesh);
-                        fixed (float* v = meshData)
+                            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboMesh);
+                            fixed (float* v = meshData)
+                            {
+                                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(meshFloatCount * sizeof(float)), v, BufferUsageARB.StaticDraw);
+                            }
+                        }
+                        finally
                         {
-                            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(meshData.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
+                            ArrayPool<float>.Shared.Return(meshData);
                         }
                     }
                 }
@@ -1308,7 +1429,7 @@ namespace MeshTool.UI.Rendering
             var proj = _viewport.Camera.GetProjectionMatrix((float)width, (float)height);
             var vp = view * proj;
 
-            float currentTime = (float)(Environment.TickCount64 - TerrainTool.IO.LogParser.AppStartTime) / 1000.0f;
+            float currentTime = (float)(Environment.TickCount64 - MeshTool.Core.IO.LogParser.AppStartTime) / 1000.0f;
 
             // 1. Draw Points
             if (_viewport.ShowPoints && _pointCount > 0)
@@ -1379,6 +1500,7 @@ namespace MeshTool.UI.Rendering
             bool hasNormalRays = _viewport.ShowNormalRays && _pointCount > 0;
             bool hasRays = hasMissRays || hasNormalRays;
             bool hasWboit = hasRays || _viewport.ShowGrid;
+
             if (hasWboit)
             {
                 var camPos = _viewport.Camera.Position;
@@ -1453,6 +1575,15 @@ namespace MeshTool.UI.Rendering
 
                 _gl.Disable(EnableCap.Blend);
                 _gl.DepthMask(true);
+
+                // Resolve MSAA OIT attachments to single-sample OIT textures.
+                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaAccumFbo);
+                _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _oitAccumResolveFbo);
+                _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+
+                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaRevealFbo);
+                _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _oitRevealResolveFbo);
+                _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
             }
 
             // Resolve MSAA opaque color/depth to resolve textures
@@ -1462,14 +1593,6 @@ namespace MeshTool.UI.Rendering
 
             if (hasWboit)
             {
-                // Resolve MSAA OIT attachments to single-sample OIT textures.
-                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaAccumFbo);
-                _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _oitAccumResolveFbo);
-                _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
-
-                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaRevealFbo);
-                _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _oitRevealResolveFbo);
-                _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
 
                 // Composite opaque + transparent into swapchain framebuffer.
                 _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)fb);

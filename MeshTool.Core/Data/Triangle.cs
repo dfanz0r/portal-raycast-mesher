@@ -1,12 +1,18 @@
 using System;
+using System.Threading;
 
-namespace TerrainTool.Data
+namespace MeshTool.Core.Data
 {
     public class Triangle
     {
         public Vertex A, B, C;
         public Vertex Centroid;
-        public bool IsDeleted = false; // Flag for Carving
+        private int _isDeleted = 0; // Flag for Carving
+        public bool IsDeleted
+        {
+            get => Volatile.Read(ref _isDeleted) != 0;
+            set => Volatile.Write(ref _isDeleted, value ? 1 : 0);
+        }
         
         // Algorithm Fields (Delaunay)
         public bool IsBad = false;
@@ -57,7 +63,12 @@ namespace TerrainTool.Data
             if (v < 0.0 || u + v > 1.0) return false;
 
             t = f * edge2.Dot(q);
-            return true;
+            return t > 1e-6;
+        }
+
+        public bool TryMarkDeleted()
+        {
+            return Interlocked.CompareExchange(ref _isDeleted, 1, 0) == 0;
         }
     }
 }

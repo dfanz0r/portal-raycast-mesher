@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace TerrainTool.IO
+namespace MeshTool.Core.IO
 {
     public class CommandLineArgs
     {

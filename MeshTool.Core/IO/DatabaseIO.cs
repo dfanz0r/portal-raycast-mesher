@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using System.IO;
-using TerrainTool.Data;
+using MeshTool.Core.Data;
 
-namespace TerrainTool.IO
+namespace MeshTool.Core.IO
 {
     public static class DatabaseIO
     {
@@ -48,30 +48,24 @@ namespace TerrainTool.IO
 
             if (!File.Exists(path)) return;
 
-            byte[] fileData = File.ReadAllBytes(path);
-            int offset = 0;
+            using var fs = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var br = new BinaryReader(fs);
 
-            int version = System.BitConverter.ToInt32(fileData, offset);
-            offset += 4;
+            int version = br.ReadInt32();
             if (version != 1 && version != 2) throw new IOException("Unknown database version");
 
             // Points
-            int pointCount = System.BitConverter.ToInt32(fileData, offset);
-            offset += 4;
+            int pointCount = br.ReadInt32();
             points = new List<Vertex>(pointCount);
             for (int i = 0; i < pointCount; i++)
             {
-                double px = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                double py = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                double pz = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                double nx = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                double ny = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                double nz = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                float spawnTime = 0f;
-                if (version >= 2)
-                {
-                    spawnTime = System.BitConverter.ToSingle(fileData, offset); offset += 4;
-                }
+                double px = br.ReadDouble();
+                double py = br.ReadDouble();
+                double pz = br.ReadDouble();
+                double nx = br.ReadDouble();
+                double ny = br.ReadDouble();
+                double nz = br.ReadDouble();
+                float spawnTime = version >= 2 ? br.ReadSingle() : 0f;
 
                 points.Add(new Vertex
                 {
@@ -82,22 +76,17 @@ namespace TerrainTool.IO
             }
 
             // Rays
-            int rayCount = System.BitConverter.ToInt32(fileData, offset);
-            offset += 4;
+            int rayCount = br.ReadInt32();
             rays = new List<Ray>(rayCount);
             for (int i = 0; i < rayCount; i++)
             {
-                double sx = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                double sy = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                double sz = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                double ex = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                double ey = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                double ez = System.BitConverter.ToDouble(fileData, offset); offset += 8;
-                float spawnTime = 0f;
-                if (version >= 2)
-                {
-                    spawnTime = System.BitConverter.ToSingle(fileData, offset); offset += 4;
-                }
+                double sx = br.ReadDouble();
+                double sy = br.ReadDouble();
+                double sz = br.ReadDouble();
+                double ex = br.ReadDouble();
+                double ey = br.ReadDouble();
+                double ez = br.ReadDouble();
+                float spawnTime = version >= 2 ? br.ReadSingle() : 0f;
 
                 rays.Add(new Ray
                 {

@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using TerrainTool.Data;
+using MeshTool.Core.Data;
 
-namespace TerrainTool.IO
+namespace MeshTool.Core.IO
 {
     public static class ObjExporter
     {

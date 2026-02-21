@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using TerrainTool.Data;
+using MeshTool.Core.Data;
 
-namespace TerrainTool.Algorithms
+namespace MeshTool.Core.Algorithms
 {
     public sealed class IncrementalPointIndex
     {

@@ -5,9 +5,9 @@ using SharpGLTF.Geometry;
 using SharpGLTF.Geometry.VertexTypes;
 using SharpGLTF.Materials;
 using SharpGLTF.Scenes;
-using TerrainTool.Data;
+using MeshTool.Core.Data;
 
-namespace TerrainTool.IO
+namespace MeshTool.Core.IO
 {
     using VPOSNRM = VertexBuilder<VertexPositionNormal, VertexEmpty, VertexEmpty>;
 

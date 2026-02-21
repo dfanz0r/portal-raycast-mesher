@@ -4,11 +4,11 @@ using System.IO;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using TerrainTool.Algorithms;
-using TerrainTool.Config;
-using TerrainTool.Data;
+using MeshTool.Core.Algorithms;
+using MeshTool.Core.Config;
+using MeshTool.Core.Data;
 
-namespace TerrainTool.IO
+namespace MeshTool.Core.IO
 {
     public sealed class MonitorRunOptions
     {
@@ -90,7 +90,11 @@ namespace TerrainTool.IO
             DateTime lastMutationUtc = DateTime.MinValue;
             DateTime lastSaveUtc = DateTime.MinValue;
             DateTime lastSnapshotUtc = DateTime.MinValue;
-            float avgDistance = EstimateAverageSpacing(masterPoints);
+
+            double minX, maxX, minZ, maxZ;
+            bool hasBounds;
+            ScanBoundsXZ(masterPoints, out minX, out maxX, out minZ, out maxZ, out hasBounds);
+            float avgDistance = EstimateAverageSpacing(masterPoints.Count, minX, maxX, minZ, maxZ, hasBounds);
 
             var lineChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(options.ChannelCapacity)
             {
@@ -103,13 +107,13 @@ namespace TerrainTool.IO
 
             // Establish a baseline line count that matches the file at the moment we start tailing.
             // This makes the displayed "fileLine" approximate the editor's line count.
-            baselineFileLines = CountFileLinesApprox(logPath);
+            baselineFileLines = CountFileLinesExact(logPath);
             tailer.Reset += e =>
             {
                 // For new file/rotation/truncation, baseline should reflect the new file state.
                 // If we're tailing from end, baseline is the full file's current line count.
                 // If tailing from start, baseline is 0.
-                baselineFileLines = e.StartAtEnd ? CountFileLinesApprox(logPath) : 0;
+                baselineFileLines = e.StartAtEnd ? CountFileLinesExact(logPath) : 0;
                 Interlocked.Exchange(ref processedLines, 0);
             };
 
@@ -150,10 +154,27 @@ namespace TerrainTool.IO
 
                                 dirty = true;
                                 lastMutationUtc = DateTime.UtcNow;
-                                // Only recalculate average distance occasionally to prevent lag
-                                if (masterPoints.Count % 5000 < pendingHits.Count)
+
+                                if (newPointsArray.Length > 0)
                                 {
-                                    avgDistance = EstimateAverageSpacing(masterPoints);
+                                    for (int i = 0; i < newPointsArray.Length; i++)
+                                    {
+                                        var p = newPointsArray[i].Position;
+                                        if (!hasBounds)
+                                        {
+                                            minX = maxX = p.X;
+                                            minZ = maxZ = p.Z;
+                                            hasBounds = true;
+                                        }
+                                        else
+                                        {
+                                            if (p.X < minX) minX = p.X;
+                                            if (p.X > maxX) maxX = p.X;
+                                            if (p.Z < minZ) minZ = p.Z;
+                                            if (p.Z > maxZ) maxZ = p.Z;
+                                        }
+                                    }
+                                    avgDistance = EstimateAverageSpacing(masterPoints.Count, minX, maxX, minZ, maxZ, hasBounds);
                                 }
                             }
                         }
@@ -183,9 +204,6 @@ namespace TerrainTool.IO
                 await foreach (var line in lineChannel.Reader.ReadAllAsync(cancellationToken))
                 {
                     processedLines++;
-
-                    if (line.StartsWith("[FRAGMENT]", StringComparison.Ordinal))
-                        continue;
 
                     if (LogParser.TryParseLine(line, out var hit, out var miss, out bool isMiss))
                     {
@@ -333,30 +351,37 @@ namespace TerrainTool.IO
             }
         }
 
-        private static float EstimateAverageSpacing(List<Vertex> points)
+        private static void ScanBoundsXZ(List<Vertex> points, out double minX, out double maxX, out double minZ, out double maxZ, out bool hasBounds)
         {
-            if (points.Count < 2) return 1.0f;
-
-            double minX = double.MaxValue, minZ = double.MaxValue;
-            double maxX = double.MinValue, maxZ = double.MinValue;
+            minX = double.MaxValue;
+            maxX = double.MinValue;
+            minZ = double.MaxValue;
+            maxZ = double.MinValue;
+            hasBounds = false;
 
             foreach (var p in points)
             {
+                hasBounds = true;
                 if (p.Position.X < minX) minX = p.Position.X;
                 if (p.Position.X > maxX) maxX = p.Position.X;
                 if (p.Position.Z < minZ) minZ = p.Position.Z;
                 if (p.Position.Z > maxZ) maxZ = p.Position.Z;
             }
+        }
+
+        private static float EstimateAverageSpacing(int pointCount, double minX, double maxX, double minZ, double maxZ, bool hasBounds)
+        {
+            if (pointCount < 2 || !hasBounds) return 1.0f;
 
             double dx = Math.Max(1e-3, maxX - minX);
             double dz = Math.Max(1e-3, maxZ - minZ);
             double area = dx * dz;
-            double spacing = Math.Sqrt(area / Math.Max(1, points.Count));
+            double spacing = Math.Sqrt(area / Math.Max(1, pointCount));
 
             return (float)Math.Clamp(spacing, 0.02, 500.0);
         }
 
-        private static long CountFileLinesApprox(string path)
+        private static long CountFileLinesExact(string path)
         {
             try
             {
@@ -379,7 +404,6 @@ namespace TerrainTool.IO
                     lastByte = buffer[read - 1];
                 }
 
-                // If file isn't empty and doesn't end with a newline, it still has a final line.
                 if (sawAnyByte && lastByte != (byte)'\n') lines++;
                 return lines;
             }

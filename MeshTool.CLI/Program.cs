@@ -5,13 +5,13 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using TerrainTool.Algorithms;
-using TerrainTool.Config;
-using TerrainTool.Data;
-using TerrainTool.IO;
+using MeshTool.Core.Algorithms;
+using MeshTool.Core.Config;
+using MeshTool.Core.Data;
+using MeshTool.Core.IO;
 
 
-namespace TerrainTool
+namespace MeshTool.Core
 {
     class Program
     {
@@ -140,7 +140,7 @@ namespace TerrainTool
 
             // 3. Constructive Geometry (Delaunay Meshing)
             Console.WriteLine("[MESH] Building Adaptive Mesh...");
-            var allTriangles = DelaunayMesher.GenerateMesh(masterPoints);
+            var allTriangles = DelaunayMesher.GenerateMesh(masterPoints, null, null);
 
             // 4. Destructive Geometry (Space Carving)
             if (masterMisses.Count > 0)
@@ -171,6 +171,27 @@ namespace TerrainTool
 
                 // Remove the deleted triangles from the list
                 allTriangles = allTriangles.Where(t => !t.IsDeleted).ToList();
+            }
+
+            int removedBoundary;
+            allTriangles = DelaunayMesher.CullWeakBoundaryTriangles(
+                allTriangles,
+                masterPoints,
+                Settings.BOUNDARY_EDGE_SPACING_MULTIPLIER,
+                Settings.BOUNDARY_MIN_NORMALIZED_SUPPORT,
+                Settings.BOUNDARY_HEIGHT_TOL_MULTIPLIER,
+                Settings.BOUNDARY_MIN_HEIGHT_TOL,
+                out removedBoundary);
+            if (removedBoundary > 0)
+            {
+                Console.WriteLine($"[MESH] Removed {removedBoundary} weak boundary triangles.");
+            }
+
+            int removedSkinny;
+            allTriangles = DelaunayMesher.FilterHighAspectRatioTriangles(allTriangles, Settings.MAX_TRIANGLE_ASPECT_RATIO, out removedSkinny);
+            if (removedSkinny > 0)
+            {
+                Console.WriteLine($"[MESH] Removed {removedSkinny} skinny triangles (aspect > {Settings.MAX_TRIANGLE_ASPECT_RATIO:F1}).");
             }
 
             Console.WriteLine($"[MESH] Final Triangle Count: {allTriangles.Count}");

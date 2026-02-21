@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using TerrainTool.Config;
-using TerrainTool.Data;
+using MeshTool.Core.Config;
+using MeshTool.Core.Data;
 
-namespace TerrainTool.Algorithms
+namespace MeshTool.Core.Algorithms
 {
     public static class SpaceCarver
     {
@@ -17,6 +17,7 @@ namespace TerrainTool.Algorithms
             Parallel.ForEach(rays, ray =>
             {
                 Vector3 direction = ray.GetDirection(out double rLen);
+                if (rLen <= 1e-6) return;
 
                 // Calculate Ray Bounds for AABB check
                 Bounds rayBounds = ray.Bounds;
@@ -28,15 +29,11 @@ namespace TerrainTool.Algorithms
                 {
                     if (tri.IsDeleted) continue;
 
-                    if (tri.Intersects(ray.Start, direction, out double t))
+                    if (tri.Intersects(ray.Start, direction, out double t) && t <= (rLen + 1e-6))
                     {
-                        lock (tri)
+                        if (tri.TryMarkDeleted())
                         {
-                            if (!tri.IsDeleted)
-                            {
-                                tri.IsDeleted = true;
-                                Interlocked.Increment(ref deletedCount);
-                            }
+                            Interlocked.Increment(ref deletedCount);
                         }
                     }
                 }

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
-namespace TerrainTool.Data
+namespace MeshTool.Core.Data
 {
     public class TriangleQuadtree
     {

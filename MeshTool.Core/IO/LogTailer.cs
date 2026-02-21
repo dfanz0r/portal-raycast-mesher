@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 
-namespace TerrainTool.IO
+namespace MeshTool.Core.IO
 {
     public sealed class LogTailer
     {
@@ -216,6 +216,11 @@ namespace TerrainTool.IO
 
         private static ulong TryGetFileId(string path)
         {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return 0;
+            }
+
             try
             {
                 using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);

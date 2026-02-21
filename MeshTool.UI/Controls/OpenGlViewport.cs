@@ -135,12 +135,61 @@ namespace MeshTool.UI.Controls
 
             var ray = Camera.GetRay((float)_lastMousePos.X, (float)_lastMousePos.Y, (float)Bounds.Width, (float)Bounds.Height);
 
+            float tMin = 0f;
+            float tMax;
+            if (_hasPointBounds)
+            {
+                if (!RayIntersectsAabb(ray.Origin, ray.Direction, _pointsMin, _pointsMax, out tMin, out tMax))
+                {
+                    UpdateHoveredCoordinate(null);
+                    return;
+                }
+                tMin = MathF.Max(0f, tMin);
+            }
+            else
+            {
+                tMax = 5000f;
+            }
+
+            var candidates = new HashSet<MeshTool.Core.Data.Vertex>();
+            float step = MathF.Max(_hoverCellSize * 0.75f, 0.25f);
+            for (float t = tMin; t <= tMax; t += step)
+            {
+                var sample = ray.Origin + ray.Direction * t;
+                var cell = Quantize(sample);
+
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    for (int dy = -1; dy <= 1; dy++)
+                    {
+                        for (int dz = -1; dz <= 1; dz++)
+                        {
+                            var key = (cell.X + dx, cell.Y + dy, cell.Z + dz);
+                            if (_hoverGrid.TryGetValue(key, out var bucket))
+                            {
+                                for (int i = 0; i < bucket.Count; i++)
+                                {
+                                    candidates.Add(bucket[i]);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (candidates.Count > 10000) break;
+            }
+
+            if (candidates.Count == 0)
+            {
+                UpdateHoveredCoordinate(null);
+                return;
+            }
+
             float maxAngleCos = MathF.Cos(0.01f); // ~0.57 degrees cone
             float bestDepth = float.MaxValue;
             Silk.NET.Maths.Vector3D<float>? bestPoint = null;
-            object lockObj = new object();
 
-            System.Threading.Tasks.Parallel.ForEach(_points, p =>
+            foreach (var p in candidates)
             {
                 var toPoint = new Silk.NET.Maths.Vector3D<float>((float)p.Position.X, (float)p.Position.Y, (float)p.Position.Z) - ray.Origin;
                 float depth = Silk.NET.Maths.Vector3D.Dot(toPoint, ray.Direction);
@@ -148,21 +197,16 @@ namespace MeshTool.UI.Controls
                 if (depth > 0 && depth < bestDepth)
                 {
                     float distSq = toPoint.LengthSquared;
+                    if (distSq < 1e-9f) continue;
                     float cosTheta = depth / MathF.Sqrt(distSq);
 
                     if (cosTheta > maxAngleCos)
                     {
-                        lock (lockObj)
-                        {
-                            if (depth < bestDepth)
-                            {
-                                bestDepth = depth;
-                                bestPoint = new Silk.NET.Maths.Vector3D<float>((float)p.Position.X, (float)p.Position.Y, (float)p.Position.Z);
-                            }
-                        }
+                        bestDepth = depth;
+                        bestPoint = new Silk.NET.Maths.Vector3D<float>((float)p.Position.X, (float)p.Position.Y, (float)p.Position.Z);
                     }
                 }
-            });
+            }
 
             UpdateHoveredCoordinate(bestPoint);
         }
@@ -173,7 +217,12 @@ namespace MeshTool.UI.Controls
         }
 
         private Vector3D<float>? _hoveredCoordinate;
-        private List<TerrainTool.Data.Vertex> _points = new List<TerrainTool.Data.Vertex>();
+        private List<MeshTool.Core.Data.Vertex> _points = new List<MeshTool.Core.Data.Vertex>();
+        private readonly Dictionary<(int X, int Y, int Z), List<MeshTool.Core.Data.Vertex>> _hoverGrid = new Dictionary<(int X, int Y, int Z), List<MeshTool.Core.Data.Vertex>>();
+        private float _hoverCellSize = 1.0f;
+        private Vector3D<float> _pointsMin;
+        private Vector3D<float> _pointsMax;
+        private bool _hasPointBounds = false;
 
         public void UpdateHoveredCoordinate(Vector3D<float>? coord)
         {
@@ -191,16 +240,25 @@ namespace MeshTool.UI.Controls
         private bool _cameraInitialized = false;
         private float _gridPlaneY = 0.0f;
 
-        public void LoadMesh(List<TerrainTool.Data.Triangle>? triangles)
+        public void LoadMesh(List<MeshTool.Core.Data.Triangle>? triangles)
         {
             _renderer?.UpdateMesh(triangles);
             Invalidate();
         }
 
-        public void LoadData(TerrainTool.Data.Vertex[] points, TerrainTool.Data.Ray[] rays, float avgDistance, bool resetCamera = true)
+        public void LoadMeshRaw(float[] buffer, int vertexCount)
+        {
+            _renderer?.UpdateMeshRaw(buffer, vertexCount);
+            Invalidate();
+        }
+
+        public bool IsMeshUpdatePending => _renderer?.IsMeshUpdatePending ?? false;
+
+        public void LoadData(MeshTool.Core.Data.Vertex[] points, MeshTool.Core.Data.Ray[] rays, float avgDistance, bool resetCamera = true)
         {
             _points.Clear();
             _points.AddRange(points);
+            RebuildHoverGrid(points, avgDistance);
             _renderer?.UpdateData(points, rays, avgDistance);
 
             // Keep grid anchored to world origin so it matches axis references.
@@ -237,12 +295,106 @@ namespace MeshTool.UI.Controls
             Invalidate();
         }
 
-        public void AppendData(TerrainTool.Data.Vertex[]? newPoints, TerrainTool.Data.Ray[]? newMisses, float avgDistance)
+        public void AppendData(MeshTool.Core.Data.Vertex[]? newPoints, MeshTool.Core.Data.Ray[]? newMisses, float avgDistance)
         {
-            if (newPoints != null) _points.AddRange(newPoints);
+            if (newPoints != null)
+            {
+                _points.AddRange(newPoints);
+                AppendHoverGrid(newPoints, avgDistance);
+            }
             _renderer?.AppendData(newPoints, newMisses, avgDistance);
             _hoverDirty = true;
             Invalidate();
+        }
+
+        private void RebuildHoverGrid(MeshTool.Core.Data.Vertex[] points, float avgDistance)
+        {
+            _hoverGrid.Clear();
+            _hoverCellSize = MathF.Max(avgDistance * 2.0f, 0.25f);
+            _hasPointBounds = false;
+
+            for (int i = 0; i < points.Length; i++)
+            {
+                AddPointToHoverGrid(points[i]);
+            }
+        }
+
+        private void AppendHoverGrid(MeshTool.Core.Data.Vertex[] points, float avgDistance)
+        {
+            _hoverCellSize = MathF.Max(avgDistance * 2.0f, 0.25f);
+            for (int i = 0; i < points.Length; i++)
+            {
+                AddPointToHoverGrid(points[i]);
+            }
+        }
+
+        private void AddPointToHoverGrid(MeshTool.Core.Data.Vertex p)
+        {
+            var pos = new Vector3D<float>((float)p.Position.X, (float)p.Position.Y, (float)p.Position.Z);
+
+            if (!_hasPointBounds)
+            {
+                _pointsMin = pos;
+                _pointsMax = pos;
+                _hasPointBounds = true;
+            }
+            else
+            {
+                _pointsMin = new Vector3D<float>(MathF.Min(_pointsMin.X, pos.X), MathF.Min(_pointsMin.Y, pos.Y), MathF.Min(_pointsMin.Z, pos.Z));
+                _pointsMax = new Vector3D<float>(MathF.Max(_pointsMax.X, pos.X), MathF.Max(_pointsMax.Y, pos.Y), MathF.Max(_pointsMax.Z, pos.Z));
+            }
+
+            var key = Quantize(pos);
+            if (!_hoverGrid.TryGetValue(key, out var bucket))
+            {
+                bucket = new List<MeshTool.Core.Data.Vertex>();
+                _hoverGrid[key] = bucket;
+            }
+            bucket.Add(p);
+        }
+
+        private (int X, int Y, int Z) Quantize(Vector3D<float> p)
+        {
+            return (
+                (int)MathF.Floor(p.X / _hoverCellSize),
+                (int)MathF.Floor(p.Y / _hoverCellSize),
+                (int)MathF.Floor(p.Z / _hoverCellSize));
+        }
+
+        private static bool RayIntersectsAabb(Vector3D<float> origin, Vector3D<float> dir, Vector3D<float> bmin, Vector3D<float> bmax, out float tmin, out float tmax)
+        {
+            tmin = float.NegativeInfinity;
+            tmax = float.PositiveInfinity;
+
+            for (int axis = 0; axis < 3; axis++)
+            {
+                float o = axis == 0 ? origin.X : axis == 1 ? origin.Y : origin.Z;
+                float d = axis == 0 ? dir.X : axis == 1 ? dir.Y : dir.Z;
+                float mn = axis == 0 ? bmin.X : axis == 1 ? bmin.Y : bmin.Z;
+                float mx = axis == 0 ? bmax.X : axis == 1 ? bmax.Y : bmax.Z;
+
+                if (MathF.Abs(d) < 1e-8f)
+                {
+                    if (o < mn || o > mx) return false;
+                    continue;
+                }
+
+                float inv = 1.0f / d;
+                float t1 = (mn - o) * inv;
+                float t2 = (mx - o) * inv;
+                if (t1 > t2)
+                {
+                    float tmp = t1;
+                    t1 = t2;
+                    t2 = tmp;
+                }
+
+                if (t1 > tmin) tmin = t1;
+                if (t2 < tmax) tmax = t2;
+                if (tmax < tmin) return false;
+            }
+
+            return tmax >= 0f;
         }
 
         // Camera Controls
