@@ -14,9 +14,11 @@ namespace MeshTool.UI.Rendering
         private OpenGlViewport _viewport;
         private uint _vaoPoints, _vboInstances;
         private uint _vaoSurfels, _vboSurfelVerts;
-        private uint _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRays, _shaderProgramMesh;
+        private uint _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRayAccum, _shaderProgramRayReveal, _shaderProgramGridAccum, _shaderProgramGridReveal, _shaderProgramComposite, _shaderProgramMesh, _shaderProgramAxes;
         private uint _vaoRays, _vboRays;
         private uint _vaoMesh, _vboMesh;
+        private uint _vaoGrid, _vboGrid;
+        private uint _vaoAxes, _vboAxes;
         private int _meshVertexCount;
 
         private int _pointCapacity;
@@ -26,17 +28,26 @@ namespace MeshTool.UI.Rendering
         private int _surfelVertexCount;
 
         private uint _msaaFbo;
+        private uint _msaaAccumFbo;
+        private uint _msaaRevealFbo;
         private uint _msaaColor;
+        private uint _msaaAccum;
+        private uint _msaaReveal;
         private uint _msaaDepth;
         private uint _resolveFbo;
         private uint _resolveColor;
         private uint _resolveDepth;
+        private uint _oitAccumResolveFbo;
+        private uint _oitRevealResolveFbo;
+        private uint _oitAccumColor;
+        private uint _oitRevealColor;
         private int _msaaWidth;
         private int _msaaHeight;
         private int _msaaSamples = 4;
         private float _latestSpawnTime = 0f;
 
         public Vector3D<float>? HoveredCoordinate { get; set; }
+        public float GridPlaneY { get; set; } = 0.0f;
 
         public SceneRenderer(GlInterface glInterface, OpenGlViewport viewport)
         {
@@ -187,7 +198,7 @@ namespace MeshTool.UI.Rendering
                 }";
             _shaderProgramSurfels = CreateProgram(vsSurfel, fsSurfel);
 
-            // --- RAY/NORMAL SHADER ---
+            // --- RAY SHADERS (Weighted Blended OIT) ---
             string vsRay = @"#version 300 es
                 precision highp float;
                 layout (location = 0) in vec3 aPos;
@@ -196,32 +207,103 @@ namespace MeshTool.UI.Rendering
                 uniform mat4 uView;
                 uniform mat4 uProjection;
                 uniform float uCurrentTime;
+                uniform vec3 uCameraPos;
                 out vec3 Color;
+                out float Alpha;
+                out float IsMissRay;
                 void main() {
                     gl_Position = uProjection * uView * vec4(aPos, 1.0);
-                    // Reverse Z: gl_Position.z is mapped to [1, 0] depth
-                    
+
                     float age = uCurrentTime - aSpawnTime;
+                    bool missRay = aBaseColor.r > 0.5 && aBaseColor.g < 0.5;
+                    IsMissRay = missRay ? 1.0 : 0.0;
                     if (aSpawnTime <= 0.0 || age > 5.0 || age < 0.0) {
                         Color = aBaseColor;
                     } else {
                         float t = age / 5.0;
-                        // If it's a miss ray (base color is red), fade from white to red
-                        if (aBaseColor.r > 0.5 && aBaseColor.g < 0.5) {
-                            Color = mix(vec3(1.0, 1.0, 1.0), aBaseColor, t);
+                        if (missRay) {
+                            Color = mix(vec3(1.0, 0.45, 0.45), vec3(1.0, 0.22, 0.22), t);
                         } else {
-                            Color = aBaseColor; // Normals stay yellow
+                            Color = aBaseColor;
                         }
                     }
+
+                    float baseAlpha = missRay ? 0.75 : 0.45;
+                    float dist = length(aPos - uCameraPos);
+                    float distFade = 1.0 - smoothstep(500.0, 20000.0, dist);
+                    Alpha = baseAlpha * distFade;
                 }";
-            string fsRay = @"#version 300 es
+            string fsRayAccum = @"#version 300 es
+                precision highp float;
+                in vec3 Color;
+                in float Alpha;
+                in float IsMissRay;
+                out vec4 FragColor;
+                void main() {
+                    vec3 c = Color;
+                    if (IsMissRay > 0.5) {
+                        c = vec3(1.0, 0.22, 0.22);
+                    }
+
+                    float z = gl_FragCoord.z;
+                    float weight = clamp(Alpha * 1e4 * pow(z, 4.0), 1e-2, 3e3);
+                    FragColor = vec4(c * Alpha * weight, Alpha * weight);
+                }";
+            string fsRayReveal = @"#version 300 es
+                precision highp float;
+                in float Alpha;
+                out vec4 FragColor;
+                void main() {
+                    FragColor = vec4(Alpha, Alpha, Alpha, Alpha);
+                }";
+            _shaderProgramRayAccum = CreateProgram(vsRay, fsRayAccum);
+            _shaderProgramRayReveal = CreateProgram(vsRay, fsRayReveal);
+
+            string vsComposite = @"#version 300 es
+                precision highp float;
+                layout (location = 0) in vec3 aPos;
+                out vec2 v_uv;
+                void main() {
+                    gl_Position = vec4(aPos, 1.0);
+                    v_uv = aPos.xy * 0.5 + 0.5;
+                }";
+            string fsComposite = @"#version 300 es
+                precision highp float;
+                in vec2 v_uv;
+                uniform sampler2D uOpaqueColor;
+                uniform sampler2D uAccumColor;
+                uniform sampler2D uRevealColor;
+                out vec4 FragColor;
+                void main() {
+                    vec3 opaque = texture(uOpaqueColor, v_uv).rgb;
+                    vec4 accum = texture(uAccumColor, v_uv);
+                    float reveal = clamp(texture(uRevealColor, v_uv).r, 0.0, 1.0);
+                    vec3 trans = accum.rgb / max(accum.a, 1e-5);
+                    vec3 outColor = trans * (1.0 - reveal) + opaque * reveal;
+                    FragColor = vec4(outColor, 1.0);
+                }";
+            _shaderProgramComposite = CreateProgram(vsComposite, fsComposite);
+
+            // --- AXES SHADER ---
+            string vsAxes = @"#version 300 es
+                precision highp float;
+                layout (location = 0) in vec3 aPos;
+                layout (location = 1) in vec3 aColor;
+                uniform mat4 uView;
+                uniform mat4 uProjection;
+                out vec3 Color;
+                void main() {
+                    gl_Position = uProjection * uView * vec4(aPos, 1.0);
+                    Color = aColor;
+                }";
+            string fsAxes = @"#version 300 es
                 precision highp float;
                 in vec3 Color;
                 out vec4 FragColor;
                 void main() {
                     FragColor = vec4(Color, 1.0);
                 }";
-            _shaderProgramRays = CreateProgram(vsRay, fsRay);
+            _shaderProgramAxes = CreateProgram(vsAxes, fsAxes);
 
             // --- MESH SHADER ---
             string vsMesh = @"#version 300 es
@@ -247,6 +329,150 @@ namespace MeshTool.UI.Rendering
                     FragColor = vec4(color, 1.0);
                 }";
             _shaderProgramMesh = CreateProgram(vsMesh, fsMesh);
+
+            // --- GRID SHADER ---
+            string vsGrid = @"#version 300 es
+                precision highp float;
+                layout (location = 0) in vec3 aPos;
+                out vec2 v_uv;
+                void main() {
+                    gl_Position = vec4(aPos, 1.0);
+                    v_uv = aPos.xy;
+                }";
+            string fsGridCommon = @"
+                precision highp float;
+                in vec2 v_uv;
+                uniform mat4 uView;
+                uniform mat4 uProjection;
+                uniform vec3 uCameraPos;
+                uniform float uGridPlaneY;
+                uniform float uGridSpacingMinor;
+                uniform float uGridSpacingMajor0;
+                uniform float uGridSpacingMajor1;
+                uniform vec2 uGridPhaseMinor;
+                uniform vec2 uGridPhaseMajor0;
+                uniform vec2 uGridPhaseMajor1;
+                uniform float uGridFade;
+                uniform float uGridFadeStart;
+                uniform float uGridFadeEnd;
+                float GridLineAA(vec2 localXZ, float spacing, vec2 phase, float lineWidthPx) {
+                    vec2 uv = (localXZ + phase) / spacing;
+                    vec2 deriv = max(fwidth(uv), vec2(1e-6));
+                    vec2 distToLine = abs(fract(uv - 0.5) - 0.5) / deriv;
+                    float lineDist = min(distToLine.x, distToLine.y);
+                    return 1.0 - smoothstep(lineWidthPx, lineWidthPx + 1.0, lineDist);
+                }
+";
+
+            string fsGridAccum = @"#version 300 es
+" + fsGridCommon + @"
+                out vec4 FragColor;
+                void main() {
+                    mat4 viewInv = inverse(uView);
+                    mat4 projInv = inverse(uProjection);
+
+                    vec4 nearViewH = projInv * vec4(v_uv.x, v_uv.y, 1.0, 1.0);
+                    vec4 farViewH = projInv * vec4(v_uv.x, v_uv.y, 0.0, 1.0);
+                    if (abs(nearViewH.w) < 0.000001 || abs(farViewH.w) < 0.000001) discard;
+                    vec3 nearView = nearViewH.xyz / nearViewH.w;
+                    vec3 farView = farViewH.xyz / farViewH.w;
+                    vec3 rayDirView = normalize(farView - nearView);
+                    vec3 rayDirWorld = normalize(mat3(viewInv) * rayDirView);
+
+                    float rayY = rayDirWorld.y;
+                    float safeRayY = abs(rayY) < 0.000001 ? (rayY < 0.0 ? -0.000001 : 0.000001) : rayY;
+                    float absRayY = abs(safeRayY);
+
+                    float t = (uGridPlaneY - uCameraPos.y) / safeRayY;
+                    if (t <= 0.0) discard;
+
+                    vec3 hitPosView = rayDirView * t;
+                    vec2 localXZ = rayDirWorld.xz * t;
+
+                    vec4 clip_space_pos = uProjection * vec4(hitPosView, 1.0);
+                    if (clip_space_pos.w <= 0.0) discard;
+                    float ndc_z = clip_space_pos.z / clip_space_pos.w;
+                    gl_FragDepth = clamp((ndc_z + 1.0) * 0.5, 0.0, 1.0);
+
+                    float fade = clamp(uGridFade, 0.0, 1.0);
+                    float widthPx = 1.0;
+                    float minor = GridLineAA(localXZ, uGridSpacingMinor, uGridPhaseMinor, widthPx);
+                    float major0 = GridLineAA(localXZ, uGridSpacingMajor0, uGridPhaseMajor0, widthPx);
+                    float major1 = GridLineAA(localXZ, uGridSpacingMajor1, uGridPhaseMajor1, widthPx);
+
+                    float wMinor = 0.08;
+                    float wMajor = 0.30;
+                    float aMinor = minor * ((1.0 - fade) * wMinor);
+                    float aMajor0 = major0 * (((1.0 - fade) * wMajor) + (fade * wMinor));
+                    float aMajor1 = major1 * (fade * wMajor);
+                    float gridAlpha = clamp(aMinor + aMajor0 + aMajor1, 0.0, 0.55);
+
+                    vec3 gridColor = vec3(0.4, 0.4, 0.4);
+                    vec4 finalColor = vec4(gridColor, gridAlpha);
+
+                    float horizonFade = smoothstep(0.01, 0.03, absRayY);
+                    finalColor.a *= horizonFade;
+                    if (finalColor.a < 0.001) discard;
+
+                    float z = gl_FragDepth;
+                    float weight = clamp(finalColor.a * 1e4 * pow(z, 4.0), 1e-2, 3e3);
+                    FragColor = vec4(finalColor.rgb * finalColor.a * weight, finalColor.a * weight);
+                }";
+
+            string fsGridReveal = @"#version 300 es
+" + fsGridCommon + @"
+                out vec4 FragColor;
+                void main() {
+                    mat4 viewInv = inverse(uView);
+                    mat4 projInv = inverse(uProjection);
+
+                    vec4 nearViewH = projInv * vec4(v_uv.x, v_uv.y, 1.0, 1.0);
+                    vec4 farViewH = projInv * vec4(v_uv.x, v_uv.y, 0.0, 1.0);
+                    if (abs(nearViewH.w) < 0.000001 || abs(farViewH.w) < 0.000001) discard;
+                    vec3 nearView = nearViewH.xyz / nearViewH.w;
+                    vec3 farView = farViewH.xyz / farViewH.w;
+                    vec3 rayDirView = normalize(farView - nearView);
+                    vec3 rayDirWorld = normalize(mat3(viewInv) * rayDirView);
+
+                    float rayY = rayDirWorld.y;
+                    float safeRayY = abs(rayY) < 0.000001 ? (rayY < 0.0 ? -0.000001 : 0.000001) : rayY;
+                    float absRayY = abs(safeRayY);
+
+                    float t = (uGridPlaneY - uCameraPos.y) / safeRayY;
+                    if (t <= 0.0) discard;
+
+                    vec3 hitPosView = rayDirView * t;
+                    vec2 localXZ = rayDirWorld.xz * t;
+
+                    vec4 clip_space_pos = uProjection * vec4(hitPosView, 1.0);
+                    if (clip_space_pos.w <= 0.0) discard;
+                    float ndc_z = clip_space_pos.z / clip_space_pos.w;
+                    gl_FragDepth = clamp((ndc_z + 1.0) * 0.5, 0.0, 1.0);
+
+                    float fade = clamp(uGridFade, 0.0, 1.0);
+                    float widthPx = 1.0;
+                    float minor = GridLineAA(localXZ, uGridSpacingMinor, uGridPhaseMinor, widthPx);
+                    float major0 = GridLineAA(localXZ, uGridSpacingMajor0, uGridPhaseMajor0, widthPx);
+                    float major1 = GridLineAA(localXZ, uGridSpacingMajor1, uGridPhaseMajor1, widthPx);
+
+                    float wMinor = 0.08;
+                    float wMajor = 0.30;
+                    float aMinor = minor * ((1.0 - fade) * wMinor);
+                    float aMajor0 = major0 * (((1.0 - fade) * wMajor) + (fade * wMinor));
+                    float aMajor1 = major1 * (fade * wMajor);
+                    float gridAlpha = clamp(aMinor + aMajor0 + aMajor1, 0.0, 0.55);
+
+                    vec4 finalColor = vec4(1.0, 1.0, 1.0, gridAlpha);
+
+                    float horizonFade = smoothstep(0.01, 0.03, absRayY);
+                    finalColor.a *= horizonFade;
+                    if (finalColor.a < 0.001) discard;
+
+                    FragColor = vec4(finalColor.a, finalColor.a, finalColor.a, finalColor.a);
+                }";
+
+            _shaderProgramGridAccum = CreateProgram(vsGrid, fsGridAccum);
+            _shaderProgramGridReveal = CreateProgram(vsGrid, fsGridReveal);
         }
 
         private unsafe uint CreateProgram(string vsSource, string fsSource)
@@ -367,6 +593,51 @@ namespace MeshTool.UI.Rendering
             _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
             _gl.EnableVertexAttribArray(1);
 
+            // 5. Grid VAO (Full screen quad)
+            _vaoGrid = _gl.GenVertexArray();
+            _vboGrid = _gl.GenBuffer();
+            float[] gridVerts = {
+                -1f,  1f, 0f,
+                -1f, -1f, 0f,
+                 1f, -1f, 0f,
+                -1f,  1f, 0f,
+                 1f, -1f, 0f,
+                 1f,  1f, 0f
+            };
+            _gl.BindVertexArray(_vaoGrid);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboGrid);
+            fixed (float* v = gridVerts)
+            {
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(gridVerts.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
+            }
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+            _gl.EnableVertexAttribArray(0);
+
+            // 6. Axes VAO
+            _vaoAxes = _gl.GenVertexArray();
+            _vboAxes = _gl.GenBuffer();
+            float[] axesVerts = {
+                // X axis (Red)
+                0f, 0f, 0f,  1f, 0f, 0f,
+                10000f, 0f, 0f,  1f, 0f, 0f,
+                // Y axis (Green)
+                0f, 0f, 0f,  0f, 1f, 0f,
+                0f, 10000f, 0f,  0f, 1f, 0f,
+                // Z axis (Blue)
+                0f, 0f, 0f,  0f, 0f, 1f,
+                0f, 0f, 10000f,  0f, 0f, 1f
+            };
+            _gl.BindVertexArray(_vaoAxes);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboAxes);
+            fixed (float* v = axesVerts)
+            {
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(axesVerts.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
+            }
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)0);
+            _gl.EnableVertexAttribArray(0);
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+            _gl.EnableVertexAttribArray(1);
+
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
             _gl.BindVertexArray(0);
         }
@@ -374,25 +645,42 @@ namespace MeshTool.UI.Rendering
         public void Deinit()
         {
             if (_msaaFbo != 0) _gl.DeleteFramebuffer(_msaaFbo);
+            if (_msaaAccumFbo != 0) _gl.DeleteFramebuffer(_msaaAccumFbo);
+            if (_msaaRevealFbo != 0) _gl.DeleteFramebuffer(_msaaRevealFbo);
             if (_msaaColor != 0) _gl.DeleteRenderbuffer(_msaaColor);
+            if (_msaaAccum != 0) _gl.DeleteRenderbuffer(_msaaAccum);
+            if (_msaaReveal != 0) _gl.DeleteRenderbuffer(_msaaReveal);
             if (_msaaDepth != 0) _gl.DeleteRenderbuffer(_msaaDepth);
 
             if (_resolveFbo != 0) _gl.DeleteFramebuffer(_resolveFbo);
             if (_resolveColor != 0) _gl.DeleteTexture(_resolveColor);
             if (_resolveDepth != 0) _gl.DeleteTexture(_resolveDepth);
+            if (_oitAccumResolveFbo != 0) _gl.DeleteFramebuffer(_oitAccumResolveFbo);
+            if (_oitRevealResolveFbo != 0) _gl.DeleteFramebuffer(_oitRevealResolveFbo);
+            if (_oitAccumColor != 0) _gl.DeleteTexture(_oitAccumColor);
+            if (_oitRevealColor != 0) _gl.DeleteTexture(_oitRevealColor);
 
             _gl.DeleteVertexArray(_vaoPoints);
             _gl.DeleteVertexArray(_vaoSurfels);
             _gl.DeleteVertexArray(_vaoRays);
             _gl.DeleteVertexArray(_vaoMesh);
+            _gl.DeleteVertexArray(_vaoGrid);
+            _gl.DeleteVertexArray(_vaoAxes);
             _gl.DeleteBuffer(_vboInstances);
             _gl.DeleteBuffer(_vboSurfelVerts);
             _gl.DeleteBuffer(_vboRays);
             _gl.DeleteBuffer(_vboMesh);
+            _gl.DeleteBuffer(_vboGrid);
+            _gl.DeleteBuffer(_vboAxes);
             _gl.DeleteProgram(_shaderProgramPoints);
             _gl.DeleteProgram(_shaderProgramSurfels);
-            _gl.DeleteProgram(_shaderProgramRays);
+            _gl.DeleteProgram(_shaderProgramRayAccum);
+            _gl.DeleteProgram(_shaderProgramRayReveal);
+            _gl.DeleteProgram(_shaderProgramGridAccum);
+            _gl.DeleteProgram(_shaderProgramGridReveal);
+            _gl.DeleteProgram(_shaderProgramComposite);
             _gl.DeleteProgram(_shaderProgramMesh);
+            _gl.DeleteProgram(_shaderProgramAxes);
             _gl.Dispose();
         }
 
@@ -408,6 +696,7 @@ namespace MeshTool.UI.Rendering
 
         private int _pointCount;
         private int _rayCount;
+        private int _missRayCount;
 
         public unsafe void UpdateMesh(System.Collections.Generic.List<TerrainTool.Data.Triangle>? triangles)
         {
@@ -516,7 +805,8 @@ namespace MeshTool.UI.Rendering
                 _avgDistance = _pendingAvgDistance;
 
                 _pointCount = points.Length;
-                _rayCount = rays.Length + _pointCount;
+                _missRayCount = rays.Length;
+                _rayCount = _missRayCount + _pointCount;
 
                 if (_pointCount > _pointCapacity)
                 {
@@ -802,6 +1092,7 @@ namespace MeshTool.UI.Rendering
                         _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(_rayCount * 14 * sizeof(float)), (nuint)(rayData.Length * sizeof(float)), v);
                     }
                     _rayCount = newRayCount;
+                    _missRayCount += addedMisses;
                 }
             }
 
@@ -878,12 +1169,20 @@ namespace MeshTool.UI.Rendering
             if (width != _msaaWidth || height != _msaaHeight)
             {
                 if (_msaaFbo != 0) _gl.DeleteFramebuffer(_msaaFbo);
+                if (_msaaAccumFbo != 0) _gl.DeleteFramebuffer(_msaaAccumFbo);
+                if (_msaaRevealFbo != 0) _gl.DeleteFramebuffer(_msaaRevealFbo);
                 if (_msaaColor != 0) _gl.DeleteRenderbuffer(_msaaColor);
+                if (_msaaAccum != 0) _gl.DeleteRenderbuffer(_msaaAccum);
+                if (_msaaReveal != 0) _gl.DeleteRenderbuffer(_msaaReveal);
                 if (_msaaDepth != 0) _gl.DeleteRenderbuffer(_msaaDepth);
 
                 if (_resolveFbo != 0) _gl.DeleteFramebuffer(_resolveFbo);
                 if (_resolveColor != 0) _gl.DeleteTexture(_resolveColor);
                 if (_resolveDepth != 0) _gl.DeleteTexture(_resolveDepth);
+                if (_oitAccumResolveFbo != 0) _gl.DeleteFramebuffer(_oitAccumResolveFbo);
+                if (_oitRevealResolveFbo != 0) _gl.DeleteFramebuffer(_oitRevealResolveFbo);
+                if (_oitAccumColor != 0) _gl.DeleteTexture(_oitAccumColor);
+                if (_oitRevealColor != 0) _gl.DeleteTexture(_oitRevealColor);
 
                 _msaaWidth = width;
                 _msaaHeight = height;
@@ -896,6 +1195,16 @@ namespace MeshTool.UI.Rendering
                 _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _msaaColor);
                 _gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)_msaaSamples, InternalFormat.Rgba8, (uint)width, (uint)height);
                 _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, _msaaColor);
+
+                _msaaAccum = _gl.GenRenderbuffer();
+                _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _msaaAccum);
+                _gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)_msaaSamples, InternalFormat.Rgba16f, (uint)width, (uint)height);
+                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment1, RenderbufferTarget.Renderbuffer, _msaaAccum);
+
+                _msaaReveal = _gl.GenRenderbuffer();
+                _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _msaaReveal);
+                _gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)_msaaSamples, InternalFormat.Rgba8, (uint)width, (uint)height);
+                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment2, RenderbufferTarget.Renderbuffer, _msaaReveal);
 
                 _msaaDepth = _gl.GenRenderbuffer();
                 _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _msaaDepth);
@@ -912,15 +1221,69 @@ namespace MeshTool.UI.Rendering
                 _resolveColor = _gl.GenTexture();
                 _gl.BindTexture(TextureTarget.Texture2D, _resolveColor);
                 _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)width, (uint)height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, null);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
                 _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _resolveColor, 0);
 
                 _resolveDepth = _gl.GenTexture();
                 _gl.BindTexture(TextureTarget.Texture2D, _resolveDepth);
                 _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.DepthComponent32f, (uint)width, (uint)height, 0, PixelFormat.DepthComponent, PixelType.Float, null);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
                 _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, _resolveDepth, 0);
 
                 var status2 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
                 if (status2 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] Resolve FBO incomplete: {status2}");
+
+                // 3. OIT resolve textures/FBOs (single sample)
+                _oitAccumResolveFbo = _gl.GenFramebuffer();
+                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _oitAccumResolveFbo);
+
+                _oitAccumColor = _gl.GenTexture();
+                _gl.BindTexture(TextureTarget.Texture2D, _oitAccumColor);
+                _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba16f, (uint)width, (uint)height, 0, PixelFormat.Rgba, PixelType.HalfFloat, null);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+                _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _oitAccumColor, 0);
+
+                var status3 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+                if (status3 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] OIT Accum Resolve FBO incomplete: {status3}");
+
+                _oitRevealResolveFbo = _gl.GenFramebuffer();
+                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _oitRevealResolveFbo);
+
+                _oitRevealColor = _gl.GenTexture();
+                _gl.BindTexture(TextureTarget.Texture2D, _oitRevealColor);
+                _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)width, (uint)height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, null);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+                _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _oitRevealColor, 0);
+
+                var status4 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+                if (status4 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] OIT Reveal Resolve FBO incomplete: {status4}");
+
+                // 4. MSAA OIT FBOs (single color attachment each, shared depth)
+                _msaaAccumFbo = _gl.GenFramebuffer();
+                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaAccumFbo);
+                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, _msaaAccum);
+                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, _msaaDepth);
+                var status5 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+                if (status5 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] MSAA Accum FBO incomplete: {status5}");
+
+                _msaaRevealFbo = _gl.GenFramebuffer();
+                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaRevealFbo);
+                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, _msaaReveal);
+                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, _msaaDepth);
+                var status6 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+                if (status6 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] MSAA Reveal FBO incomplete: {status6}");
             }
 
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaFbo);
@@ -932,7 +1295,8 @@ namespace MeshTool.UI.Rendering
             _gl.Enable(EnableCap.DepthTest);
             _gl.DepthFunc(DepthFunction.Greater);
 
-            if (_pointCount == 0 && _rayCount == 0)
+            bool hasAnyGeometry = _pointCount > 0 || _rayCount > 0 || _meshVertexCount > 0;
+            if (!hasAnyGeometry && !_viewport.ShowGrid)
             {
                 _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaFbo);
                 _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, (uint)fb);
@@ -989,20 +1353,7 @@ namespace MeshTool.UI.Rendering
                 _gl.DrawArraysInstanced(PrimitiveType.Triangles, 0, (uint)_surfelVertexCount, (uint)_pointCount);
             }
 
-            // 3. Draw Rays & Normals
-            if (_viewport.ShowRays && _rayCount > 0)
-            {
-                _gl.UseProgram(_shaderProgramRays);
-                SetUniforms(_shaderProgramRays, view, proj);
-
-                int timeLoc = _gl.GetUniformLocation(_shaderProgramRays, "uCurrentTime");
-                _gl.Uniform1(timeLoc, currentTime);
-
-                _gl.BindVertexArray(_vaoRays);
-                _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)(_rayCount * 2));
-            }
-
-            // 4. Draw Mesh
+            // 3. Draw Mesh
             if (_viewport.ShowMesh && _meshVertexCount > 0)
             {
                 _gl.UseProgram(_shaderProgramMesh);
@@ -1012,17 +1363,161 @@ namespace MeshTool.UI.Rendering
                 _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_meshVertexCount);
             }
 
+            // 4. Draw Axes
+            if (_viewport.ShowGrid)
+            {
+                _gl.UseProgram(_shaderProgramAxes);
+                SetUniforms(_shaderProgramAxes, view, proj);
+
+                _gl.BindVertexArray(_vaoAxes);
+                _gl.DrawArrays(PrimitiveType.Lines, 0, 6);
+            }
+
             _gl.BindVertexArray(0);
 
-            // Resolve MSAA to Resolve FBO
+            bool hasMissRays = _viewport.ShowMissRays && _missRayCount > 0;
+            bool hasNormalRays = _viewport.ShowNormalRays && _pointCount > 0;
+            bool hasRays = hasMissRays || hasNormalRays;
+            bool hasWboit = hasRays || _viewport.ShowGrid;
+            if (hasWboit)
+            {
+                var camPos = _viewport.Camera.Position;
+                _gl.Enable(EnableCap.DepthTest);
+                _gl.DepthFunc(DepthFunction.Greater);
+                _gl.DepthMask(false);
+                _gl.Enable(EnableCap.Blend);
+
+                // OIT pass A (accumulation) in dedicated MSAA FBO
+                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaAccumFbo);
+                _gl.ClearColor(0f, 0f, 0f, 0f);
+                _gl.Clear((uint)ClearBufferMask.ColorBufferBit);
+                _gl.BlendFunc(BlendingFactor.One, BlendingFactor.One);
+
+                if (_viewport.ShowGrid)
+                {
+                    _gl.UseProgram(_shaderProgramGridAccum);
+                    SetGridUniforms(_shaderProgramGridAccum, view, proj, camPos);
+                    _gl.BindVertexArray(_vaoGrid);
+                    _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
+                }
+
+                if (hasRays)
+                {
+                    _gl.UseProgram(_shaderProgramRayAccum);
+                    SetUniforms(_shaderProgramRayAccum, view, proj);
+                    int timeLocAccum = _gl.GetUniformLocation(_shaderProgramRayAccum, "uCurrentTime");
+                    _gl.Uniform1(timeLocAccum, currentTime);
+                    _gl.Uniform3(_gl.GetUniformLocation(_shaderProgramRayAccum, "uCameraPos"), camPos.X, camPos.Y, camPos.Z);
+                    _gl.BindVertexArray(_vaoRays);
+                    if (hasMissRays)
+                    {
+                        _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)(_missRayCount * 2));
+                    }
+                    if (hasNormalRays)
+                    {
+                        _gl.DrawArrays(PrimitiveType.Lines, _missRayCount * 2, (uint)(_pointCount * 2));
+                    }
+                }
+
+                // OIT pass B (revealage) in dedicated MSAA FBO
+                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaRevealFbo);
+                _gl.ClearColor(1f, 1f, 1f, 1f);
+                _gl.Clear((uint)ClearBufferMask.ColorBufferBit);
+                _gl.BlendFunc(BlendingFactor.Zero, BlendingFactor.OneMinusSrcAlpha);
+
+                if (_viewport.ShowGrid)
+                {
+                    _gl.UseProgram(_shaderProgramGridReveal);
+                    SetGridUniforms(_shaderProgramGridReveal, view, proj, camPos);
+                    _gl.BindVertexArray(_vaoGrid);
+                    _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
+                }
+
+                if (hasRays)
+                {
+                    _gl.UseProgram(_shaderProgramRayReveal);
+                    SetUniforms(_shaderProgramRayReveal, view, proj);
+                    int timeLocReveal = _gl.GetUniformLocation(_shaderProgramRayReveal, "uCurrentTime");
+                    _gl.Uniform1(timeLocReveal, currentTime);
+                    _gl.Uniform3(_gl.GetUniformLocation(_shaderProgramRayReveal, "uCameraPos"), camPos.X, camPos.Y, camPos.Z);
+                    _gl.BindVertexArray(_vaoRays);
+                    if (hasMissRays)
+                    {
+                        _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)(_missRayCount * 2));
+                    }
+                    if (hasNormalRays)
+                    {
+                        _gl.DrawArrays(PrimitiveType.Lines, _missRayCount * 2, (uint)(_pointCount * 2));
+                    }
+                }
+
+                _gl.Disable(EnableCap.Blend);
+                _gl.DepthMask(true);
+            }
+
+            // Resolve MSAA opaque color/depth to resolve textures
             _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaFbo);
             _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _resolveFbo);
             _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
 
-            // Blit Resolve FBO to Default FBO
-            _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _resolveFbo);
-            _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, (uint)fb);
-            _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+            if (hasWboit)
+            {
+                // Resolve MSAA OIT attachments to single-sample OIT textures.
+                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaAccumFbo);
+                _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _oitAccumResolveFbo);
+                _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+
+                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaRevealFbo);
+                _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _oitRevealResolveFbo);
+                _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+
+                // Composite opaque + transparent into swapchain framebuffer.
+                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)fb);
+                _gl.Viewport(0, 0, (uint)width, (uint)height);
+                _gl.Disable(EnableCap.DepthTest);
+
+                _gl.UseProgram(_shaderProgramComposite);
+                _gl.ActiveTexture(TextureUnit.Texture0);
+                _gl.BindTexture(TextureTarget.Texture2D, _resolveColor);
+                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite, "uOpaqueColor"), 0);
+
+                _gl.ActiveTexture(TextureUnit.Texture1);
+                _gl.BindTexture(TextureTarget.Texture2D, _oitAccumColor);
+                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite, "uAccumColor"), 1);
+
+                _gl.ActiveTexture(TextureUnit.Texture2);
+                _gl.BindTexture(TextureTarget.Texture2D, _oitRevealColor);
+                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite, "uRevealColor"), 2);
+
+                _gl.BindVertexArray(_vaoGrid);
+                _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
+
+                _gl.ActiveTexture(TextureUnit.Texture2);
+                _gl.BindTexture(TextureTarget.Texture2D, 0);
+                _gl.ActiveTexture(TextureUnit.Texture1);
+                _gl.BindTexture(TextureTarget.Texture2D, 0);
+                _gl.ActiveTexture(TextureUnit.Texture0);
+                _gl.BindTexture(TextureTarget.Texture2D, 0);
+                _gl.Enable(EnableCap.DepthTest);
+            }
+            else
+            {
+                // Blit Resolve FBO to Default FBO.
+                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _resolveFbo);
+                _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, (uint)fb);
+                _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+            }
+        }
+
+        private static float PositiveModulo(float value, float modulus)
+        {
+            if (modulus <= 0.0f)
+            {
+                return 0.0f;
+            }
+
+            float result = value % modulus;
+            return result < 0.0f ? result + modulus : result;
         }
 
         private unsafe void SetUniforms(uint program, Matrix4X4<float> view, Matrix4X4<float> proj)
@@ -1033,5 +1528,42 @@ namespace MeshTool.UI.Rendering
             int projLoc = _gl.GetUniformLocation(program, "uProjection");
             _gl.UniformMatrix4(projLoc, 1, false, (float*)&proj);
         }
+
+        private void SetGridUniforms(uint program, Matrix4X4<float> view, Matrix4X4<float> proj, Vector3D<float> camPos)
+        {
+            SetUniforms(program, view, proj);
+            _gl.Uniform3(_gl.GetUniformLocation(program, "uCameraPos"), camPos.X, camPos.Y, camPos.Z);
+            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridPlaneY"), GridPlaneY);
+
+            double camHeight = Math.Max(Math.Abs((double)(camPos.Y - GridPlaneY)), 0.0001);
+            double lod = Math.Log10(Math.Max(camHeight, 1.0));
+            double expBase = Math.Floor(lod);
+            float fade = (float)(lod - expBase);
+            float spacingMajor0 = (float)Math.Pow(10.0, expBase);
+            float spacingMajor1 = spacingMajor0 * 10.0f;
+            float spacingMinor = spacingMajor0 * 0.1f;
+
+            float phaseMinorX = PositiveModulo(camPos.X, spacingMinor);
+            float phaseMinorZ = PositiveModulo(camPos.Z, spacingMinor);
+            float phaseMajor0X = PositiveModulo(camPos.X, spacingMajor0);
+            float phaseMajor0Z = PositiveModulo(camPos.Z, spacingMajor0);
+            float phaseMajor1X = PositiveModulo(camPos.X, spacingMajor1);
+            float phaseMajor1Z = PositiveModulo(camPos.Z, spacingMajor1);
+
+            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridSpacingMinor"), spacingMinor);
+            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridSpacingMajor0"), spacingMajor0);
+            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridSpacingMajor1"), spacingMajor1);
+            _gl.Uniform2(_gl.GetUniformLocation(program, "uGridPhaseMinor"), phaseMinorX, phaseMinorZ);
+            _gl.Uniform2(_gl.GetUniformLocation(program, "uGridPhaseMajor0"), phaseMajor0X, phaseMajor0Z);
+            _gl.Uniform2(_gl.GetUniformLocation(program, "uGridPhaseMajor1"), phaseMajor1X, phaseMajor1Z);
+            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridFade"), fade);
+
+            float baseFadeStart = 85000.0f;
+            float camHeightFadeStart = Math.Abs(camPos.Y - GridPlaneY) * 12.0f;
+            float fadeStart = MathF.Max(baseFadeStart, camHeightFadeStart);
+            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridFadeStart"), fadeStart);
+            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridFadeEnd"), fadeStart * 1.15f);
+        }
+
     }
 }

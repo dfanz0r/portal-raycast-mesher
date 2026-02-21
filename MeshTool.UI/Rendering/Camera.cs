@@ -19,20 +19,19 @@ namespace MeshTool.UI.Rendering
         public Matrix4X4<float> GetProjectionMatrix(float width, float height)
         {
             float aspectRatio = width / MathF.Max(1.0f, height);
-            float zFar = 100000.0f;
             float zNear = 0.1f;
             float fov = MathF.PI / 3.0f;
 
             float tanHalfFov = MathF.Tan(fov / 2.0f);
 
-            // OpenGL-style Reverse Z projection matrix
-            // Maps zNear to z_ndc = 1, and zFar to z_ndc = -1
+            // OpenGL-style reverse-Z projection with infinite far plane.
+            // Maps zNear to z_ndc = 1, and z -> +infinity to z_ndc = -1.
             var proj = new Matrix4X4<float>();
             proj.M11 = 1.0f / (aspectRatio * tanHalfFov);
             proj.M22 = 1.0f / tanHalfFov;
-            proj.M33 = (zFar + zNear) / (zFar - zNear);
+            proj.M33 = 1.0f;
             proj.M34 = -1.0f;
-            proj.M43 = (2.0f * zFar * zNear) / (zFar - zNear);
+            proj.M43 = 2.0f * zNear;
             proj.M44 = 0.0f;
 
             return proj;
@@ -85,9 +84,10 @@ namespace MeshTool.UI.Rendering
 
             Matrix4X4.Invert(view * proj, out var invViewProj);
 
-            // Reverse Z: near plane is at z_ndc = 1.0, far plane is at z_ndc = -1.0
+            // Reverse-Z infinite far: z_ndc = -1 is at infinity.
+            // Use z_ndc = 0 for the second sample to keep a finite point.
             var nearPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, 1.0f, 1.0f), invViewProj);
-            var farPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, -1.0f, 1.0f), invViewProj);
+            var farPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, 0.0f, 1.0f), invViewProj);
 
             var near = new Vector3D<float>(nearPoint.X / nearPoint.W, nearPoint.Y / nearPoint.W, nearPoint.Z / nearPoint.W);
             var far = new Vector3D<float>(farPoint.X / farPoint.W, farPoint.Y / farPoint.W, farPoint.Z / farPoint.W);

@@ -26,8 +26,10 @@ namespace MeshTool.UI.Controls
         // Toggles & properties bound to UI
         public bool ShowPoints { get; set; } = true;
         public bool ShowSurfels { get; set; } = true;
-        public bool ShowRays { get; set; } = true;
+        public bool ShowMissRays { get; set; } = false;
+        public bool ShowNormalRays { get; set; } = false;
         public bool ShowMesh { get; set; } = false;
+        public bool ShowGrid { get; set; } = true;
         public float SurfelScale { get; set; } = 1.0f;
         public Action<string>? OnLog { get; set; }
         public Action<Vector3D<float>?>? OnHoveredCoordinateChanged { get; set; }
@@ -49,6 +51,7 @@ namespace MeshTool.UI.Controls
             {
                 _renderer = new SceneRenderer(gl, this);
                 _renderer.Init();
+                _renderer.GridPlaneY = _gridPlaneY;
             }
             catch (Exception ex)
             {
@@ -186,6 +189,7 @@ namespace MeshTool.UI.Controls
         }
 
         private bool _cameraInitialized = false;
+        private float _gridPlaneY = 0.0f;
 
         public void LoadMesh(List<TerrainTool.Data.Triangle>? triangles)
         {
@@ -198,6 +202,13 @@ namespace MeshTool.UI.Controls
             _points.Clear();
             _points.AddRange(points);
             _renderer?.UpdateData(points, rays, avgDistance);
+
+            // Keep grid anchored to world origin so it matches axis references.
+            _gridPlaneY = 0.0f;
+            if (_renderer != null)
+            {
+                _renderer.GridPlaneY = _gridPlaneY;
+            }
 
             if ((resetCamera || !_cameraInitialized) && points.Length > 0)
             {

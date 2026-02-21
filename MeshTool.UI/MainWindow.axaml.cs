@@ -160,74 +160,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void BtnUpdate_Click(object sender, RoutedEventArgs e)
-    {
-        if (_monitorTask != null)
-        {
-            Log("[ERROR] Stop monitor before manual update.");
-            return;
-        }
-
-        if (string.IsNullOrEmpty(_dbPath))
-        {
-            Log("[ERROR] Select DB first.");
-            return;
-        }
-
-        BtnUpdate.IsEnabled = false;
-        try
-        {
-            await Task.Run(() =>
-            {
-                Log($"[DB] Loading {_dbPath}");
-                DatabaseIO.LoadDatabase(_dbPath, out var masterPoints, out var masterMisses);
-
-                Log($"[LOG] Parsing {_logPath}");
-                LogParser.ParseLog(_logPath, out var newPoints, out var newMisses);
-
-                if (newPoints.Count > 0 || newMisses.Count > 0)
-                {
-                    int added = PointMerger.MergePoints(masterPoints, newPoints, Settings.MIN_MERGE_DISTANCE);
-                    masterMisses.AddRange(newMisses);
-                    DatabaseIO.SaveDatabase(masterPoints, masterMisses, _dbPath);
-                    Log($"[MERGE] Added {added} points and {newMisses.Count} misses.");
-
-                    _cachedMesh = null;
-                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                    {
-                        if (ChkShowMesh.IsChecked == true)
-                        {
-                            ChkShowMesh.IsChecked = false;
-                        }
-                        Viewport?.LoadMesh(null);
-                    });
-
-                    try
-                    {
-                        File.WriteAllText(_logPath, string.Empty);
-                        Log("[LOG] Cleared log file.");
-                    }
-                    catch
-                    {
-                        Log("[WARN] Failed to clear log file.");
-                    }
-                }
-                else
-                {
-                    Log("[LOG] No new data found.");
-                }
-            });
-        }
-        catch (Exception ex)
-        {
-            Log($"[ERROR] {ex.Message}");
-        }
-        finally
-        {
-            BtnUpdate.IsEnabled = true;
-        }
-    }
-
     private async void BtnGenerateMesh_Click(object sender, RoutedEventArgs e)
     {
         if (_monitorTask != null)
@@ -280,7 +212,18 @@ public partial class MainWindow : Window
                 var sw = System.Diagnostics.Stopwatch.StartNew();
 
                 Log("[MESH] Building Adaptive Mesh...");
-                var allTriangles = DelaunayMesher.GenerateMesh(masterPoints);
+
+                System.Collections.Generic.List<TerrainTool.Data.Triangle> allTriangles;
+                allTriangles = DelaunayMesher.GenerateMesh(masterPoints, (progressTriangles) =>
+                {
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    {
+                        if (ChkShowMesh.IsChecked == true)
+                        {
+                            Viewport.LoadMesh(progressTriangles);
+                        }
+                    });
+                });
 
                 if (masterMisses.Count > 0)
                 {
@@ -503,7 +446,6 @@ public partial class MainWindow : Window
             _monitorCts = null;
 
             BtnMonitor.Content = "Start Monitor";
-            BtnUpdate.IsEnabled = true;
             BtnMesh.IsEnabled = true;
             BtnBrowseDb.IsEnabled = true;
             ChkShowMesh.IsEnabled = true;
@@ -517,7 +459,6 @@ public partial class MainWindow : Window
         }
 
         BtnMonitor.Content = "Stop Monitor";
-        BtnUpdate.IsEnabled = false;
         BtnMesh.IsEnabled = false;
         BtnBrowseDb.IsEnabled = false;
         ChkShowMesh.IsChecked = false;
@@ -533,7 +474,6 @@ public partial class MainWindow : Window
             {
                 Log($"[ERROR] {ex.Message}");
                 BtnMonitor.Content = "Start Monitor";
-                BtnUpdate.IsEnabled = true;
                 BtnMesh.IsEnabled = true;
                 BtnBrowseDb.IsEnabled = true;
                 ChkShowMesh.IsEnabled = true;
@@ -567,7 +507,6 @@ public partial class MainWindow : Window
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 BtnMonitor.Content = "Start Monitor";
-                BtnUpdate.IsEnabled = true;
                 BtnMesh.IsEnabled = true;
                 BtnBrowseDb.IsEnabled = true;
                 ChkShowMesh.IsEnabled = true;
@@ -583,7 +522,9 @@ public partial class MainWindow : Window
     {
         Viewport.ShowPoints = ChkShowPoints.IsChecked ?? true;
         Viewport.ShowSurfels = ChkShowSurfels.IsChecked ?? true;
-        Viewport.ShowRays = ChkShowRays.IsChecked ?? true;
+        Viewport.ShowMissRays = ChkShowMissRays.IsChecked ?? true;
+        Viewport.ShowNormalRays = ChkShowNormals.IsChecked ?? true;
+        Viewport.ShowGrid = ChkShowGrid.IsChecked ?? true;
         Viewport.Invalidate();
     }
 
@@ -612,7 +553,18 @@ public partial class MainWindow : Window
                     var sw = System.Diagnostics.Stopwatch.StartNew();
 
                     Log("[MESH] Building Adaptive Mesh...");
-                    var allTriangles = DelaunayMesher.GenerateMesh(masterPoints);
+
+                    System.Collections.Generic.List<TerrainTool.Data.Triangle> allTriangles;
+                    allTriangles = DelaunayMesher.GenerateMesh(masterPoints, (progressTriangles) =>
+                    {
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                        {
+                            if (ChkShowMesh.IsChecked == true)
+                            {
+                                Viewport.LoadMesh(progressTriangles);
+                            }
+                        });
+                    });
 
                     if (masterMisses.Count > 0)
                     {
@@ -677,4 +629,5 @@ public partial class MainWindow : Window
         Viewport.SurfelScale = (float)SldSurfelSize.Value;
         Viewport.Invalidate();
     }
+
 }

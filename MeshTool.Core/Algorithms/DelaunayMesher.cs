@@ -8,7 +8,7 @@ namespace TerrainTool.Algorithms
 {
     public static class DelaunayMesher
     {
-        public static List<Triangle> GenerateMesh(List<Vertex> inputPoints)
+        public static List<Triangle> GenerateMesh(List<Vertex> inputPoints, Action<List<Triangle>>? onProgress = null)
         {
             Console.WriteLine("[MESH] Starting Global Delaunay Triangulation...");
 
@@ -33,13 +33,16 @@ namespace TerrainTool.Algorithms
             List<Triangle> triangles = new List<Triangle> { superTri };
 
             // 3. Incremental Triangulation
-            // Sort points by X to optimize the "Walk" location strategy
-            points.Sort((a, b) => a.Position.X.CompareTo(b.Position.X));
+            // Sort points by Z-order curve (Morton code) to optimize the "Walk" location strategy
+            // This ensures consecutive points are spatially close in both X and Z dimensions,
+            // drastically reducing the number of steps in the walk and avoiding O(N) fallback searches.
+            points = points.OrderBy(p => GetMortonCode(p.Position.X, p.Position.Z, bounds)).ToList();
 
             // Optimization: Keep track of the last triangle to start the search
             Triangle lastTri = superTri;
 
             int count = 0;
+            System.Threading.Tasks.Task? progressTask = null;
             foreach (var p in points)
             {
                 if (++count % 10000 == 0) Console.Write(".");
@@ -191,6 +194,26 @@ namespace TerrainTool.Algorithms
                     triangles.AddRange(newTriangles);
                     lastTri = newTriangles[0];
                 }
+
+                if (onProgress != null && count % 5000 == 0)
+                {
+                    if (progressTask == null || progressTask.IsCompleted)
+                    {
+                        var snapshot = triangles.ToArray();
+                        progressTask = Task.Run(() =>
+                        {
+                            var currentTriangles = new List<Triangle>(snapshot.Length);
+                            for (int i = 0; i < snapshot.Length; i++)
+                            {
+                                var t = snapshot[i];
+                                if (t.IsBad) continue;
+                                if (IsConnectedTo(t, s1) || IsConnectedTo(t, s2) || IsConnectedTo(t, s3)) continue;
+                                currentTriangles.Add(t);
+                            }
+                            onProgress(currentTriangles);
+                        });
+                    }
+                }
             }
             Console.WriteLine();
 
@@ -307,6 +330,39 @@ namespace TerrainTool.Algorithms
                 if (p.Position.Z > maxZ) maxZ = p.Position.Z;
             }
             return new Bounds { MinX = minX, MaxX = maxX, MinZ = minZ, MaxZ = maxZ };
+        }
+
+        private static ulong GetMortonCode(double x, double z, Bounds bounds)
+        {
+            // Normalize to [0, 1]
+            double nx = (x - bounds.MinX) / (bounds.Width + 1e-9);
+            double nz = (z - bounds.MinZ) / (bounds.Depth + 1e-9);
+
+            // Scale to 32-bit integer
+            uint ix = (uint)(nx * 0xFFFFFFFF);
+            uint iz = (uint)(nz * 0xFFFFFFFF);
+
+            return InterleaveBits(ix, iz);
+        }
+
+        private static ulong InterleaveBits(uint x, uint y)
+        {
+            ulong xx = x;
+            ulong yy = y;
+
+            xx = (xx | (xx << 16)) & 0x0000FFFF0000FFFF;
+            xx = (xx | (xx << 8)) & 0x00FF00FF00FF00FF;
+            xx = (xx | (xx << 4)) & 0x0F0F0F0F0F0F0F0F;
+            xx = (xx | (xx << 2)) & 0x3333333333333333;
+            xx = (xx | (xx << 1)) & 0x5555555555555555;
+
+            yy = (yy | (yy << 16)) & 0x0000FFFF0000FFFF;
+            yy = (yy | (yy << 8)) & 0x00FF00FF00FF00FF;
+            yy = (yy | (yy << 4)) & 0x0F0F0F0F0F0F0F0F;
+            yy = (yy | (yy << 2)) & 0x3333333333333333;
+            yy = (yy | (yy << 1)) & 0x5555555555555555;
+
+            return xx | (yy << 1);
         }
     }
 }
