@@ -1175,6 +1175,9 @@ namespace MeshTool.UI.Rendering
             {
                 _avgDistance = pendingAvgDistance;
 
+                int oldPointCount = _pointCount;
+                int oldMissRayCount = _missRayCount;
+                int oldRayCount = _rayCount;
                 int addedPoints = newPoints.Length;
                 int addedMisses = newMisses.Length;
                 int addedRays = addedMisses + addedPoints; // Each point adds a normal ray
@@ -1258,7 +1261,7 @@ namespace MeshTool.UI.Rendering
 
                 if (addedRays > 0)
                 {
-                    int newRayCount = _rayCount + addedRays;
+                    int newRayCount = oldRayCount + addedRays;
                     if (newRayCount > _rayCapacity)
                     {
                         int newCapacity = Math.Max(_rayCapacity * 2, newRayCount + 10000);
@@ -1268,7 +1271,7 @@ namespace MeshTool.UI.Rendering
 
                         _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, _vboRays);
                         _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, newVbo);
-                        _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, 0, 0, (nuint)(_rayCount * 14 * sizeof(float)));
+                        _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, 0, 0, (nuint)(oldRayCount * 14 * sizeof(float)));
 
                         _gl.DeleteBuffer(_vboRays);
                         _vboRays = newVbo;
@@ -1281,77 +1284,118 @@ namespace MeshTool.UI.Rendering
                         _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(6 * sizeof(float)));
                     }
 
-                    int rayFloatCount = addedRays * 14;
-                    float[] rayData = ArrayPool<float>.Shared.Rent(rayFloatCount);
-                    try
+                    int bytesPerRay = 14 * sizeof(float);
+                    if (addedMisses > 0 && oldPointCount > 0)
                     {
-                        int offset = 0;
+                        uint tempVbo = _gl.GenBuffer();
+                        int normalBytes = oldPointCount * bytesPerRay;
+                        try
+                        {
+                            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, tempVbo);
+                            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)normalBytes, null, BufferUsageARB.DynamicDraw);
 
-                        if (addedMisses > 0)
+                            nint oldNormalsOffset = (nint)(oldMissRayCount * bytesPerRay);
+                            _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, _vboRays);
+                            _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, tempVbo);
+                            _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, oldNormalsOffset, 0, (nuint)normalBytes);
+
+                            nint shiftedNormalsOffset = (nint)((oldMissRayCount + addedMisses) * bytesPerRay);
+                            _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, tempVbo);
+                            _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, _vboRays);
+                            _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, 0, shiftedNormalsOffset, (nuint)normalBytes);
+                        }
+                        finally
+                        {
+                            _gl.DeleteBuffer(tempVbo);
+                        }
+                    }
+
+                    if (addedMisses > 0)
+                    {
+                        int missFloatCount = addedMisses * 14;
+                        float[] missData = ArrayPool<float>.Shared.Rent(missFloatCount);
+                        try
                         {
                             for (int i = 0; i < addedMisses; i++)
                             {
-                            int idx = offset + i * 14;
-                            rayData[idx + 0] = (float)newMisses![i].Start.X; rayData[idx + 1] = (float)newMisses[i].Start.Y; rayData[idx + 2] = (float)newMisses[i].Start.Z;
-                            rayData[idx + 3] = 1f; rayData[idx + 4] = 0f; rayData[idx + 5] = 0f;
-                            rayData[idx + 6] = newMisses[i].SpawnTime;
+                                int idx = i * 14;
+                                missData[idx + 0] = (float)newMisses![i].Start.X; missData[idx + 1] = (float)newMisses[i].Start.Y; missData[idx + 2] = (float)newMisses[i].Start.Z;
+                                missData[idx + 3] = 1f; missData[idx + 4] = 0f; missData[idx + 5] = 0f;
+                                missData[idx + 6] = newMisses[i].SpawnTime;
 
-                            rayData[idx + 7] = (float)newMisses[i].End.X; rayData[idx + 8] = (float)newMisses[i].End.Y; rayData[idx + 9] = (float)newMisses[i].End.Z;
-                            rayData[idx + 10] = 1f; rayData[idx + 11] = 0f; rayData[idx + 12] = 0f;
-                            rayData[idx + 13] = newMisses[i].SpawnTime;
+                                missData[idx + 7] = (float)newMisses[i].End.X; missData[idx + 8] = (float)newMisses[i].End.Y; missData[idx + 9] = (float)newMisses[i].End.Z;
+                                missData[idx + 10] = 1f; missData[idx + 11] = 0f; missData[idx + 12] = 0f;
+                                missData[idx + 13] = newMisses[i].SpawnTime;
                             }
-                            offset += addedMisses * 14;
-                        }
 
-                        if (addedPoints > 0)
+                            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
+                            fixed (float* v = missData)
+                            {
+                                _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(oldMissRayCount * bytesPerRay), (nuint)(missFloatCount * sizeof(float)), v);
+                            }
+                        }
+                        finally
+                        {
+                            ArrayPool<float>.Shared.Return(missData);
+                        }
+                    }
+
+                    if (addedPoints > 0)
+                    {
+                        int normalFloatCount = addedPoints * 14;
+                        float[] rayData = ArrayPool<float>.Shared.Rent(normalFloatCount);
+                        try
                         {
                             const float normalLen = 300.0f;
                             for (int i = 0; i < addedPoints; i++)
                             {
-                            int idx = offset + i * 14;
-                            float px = (float)newPoints![i].Position.X;
-                            float py = (float)newPoints[i].Position.Y;
-                            float pz = (float)newPoints[i].Position.Z;
+                                int idx = i * 14;
+                                float px = (float)newPoints![i].Position.X;
+                                float py = (float)newPoints[i].Position.Y;
+                                float pz = (float)newPoints[i].Position.Z;
 
-                            float nx = (float)newPoints[i].Normal.X;
-                            float ny = (float)newPoints[i].Normal.Y;
-                            float nz = (float)newPoints[i].Normal.Z;
-                            float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
-                            if (nLen > 0.00001f)
-                            {
-                                nx /= nLen;
-                                ny /= nLen;
-                                nz /= nLen;
+                                float nx = (float)newPoints[i].Normal.X;
+                                float ny = (float)newPoints[i].Normal.Y;
+                                float nz = (float)newPoints[i].Normal.Z;
+                                float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
+                                if (nLen > 0.00001f)
+                                {
+                                    nx /= nLen;
+                                    ny /= nLen;
+                                    nz /= nLen;
+                                }
+                                else
+                                {
+                                    nx = 0f;
+                                    ny = 1f;
+                                    nz = 0f;
+                                }
+
+                                rayData[idx + 0] = px; rayData[idx + 1] = py; rayData[idx + 2] = pz;
+                                rayData[idx + 3] = 1f; rayData[idx + 4] = 1f; rayData[idx + 5] = 0f;
+                                rayData[idx + 6] = 0f;
+
+                                rayData[idx + 7] = px + nx * normalLen; rayData[idx + 8] = py + ny * normalLen; rayData[idx + 9] = pz + nz * normalLen;
+                                rayData[idx + 10] = 1f; rayData[idx + 11] = 1f; rayData[idx + 12] = 0f;
+                                rayData[idx + 13] = 0f;
                             }
-                            else
+
+                            int oldNormalCount = oldPointCount;
+                            int normalInsertRayIndex = oldMissRayCount + addedMisses + oldNormalCount;
+                            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
+                            fixed (float* v = rayData)
                             {
-                                nx = 0f;
-                                ny = 1f;
-                                nz = 0f;
-                            }
-
-                            rayData[idx + 0] = px; rayData[idx + 1] = py; rayData[idx + 2] = pz;
-                            rayData[idx + 3] = 1f; rayData[idx + 4] = 1f; rayData[idx + 5] = 0f;
-                            rayData[idx + 6] = 0f;
-
-                            rayData[idx + 7] = px + nx * normalLen; rayData[idx + 8] = py + ny * normalLen; rayData[idx + 9] = pz + nz * normalLen;
-                            rayData[idx + 10] = 1f; rayData[idx + 11] = 1f; rayData[idx + 12] = 0f;
-                            rayData[idx + 13] = 0f;
+                                _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(normalInsertRayIndex * bytesPerRay), (nuint)(normalFloatCount * sizeof(float)), v);
                             }
                         }
-
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-                        fixed (float* v = rayData)
+                        finally
                         {
-                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(_rayCount * 14 * sizeof(float)), (nuint)(rayFloatCount * sizeof(float)), v);
+                            ArrayPool<float>.Shared.Return(rayData);
                         }
                     }
-                    finally
-                    {
-                        ArrayPool<float>.Shared.Return(rayData);
-                    }
+
                     _rayCount = newRayCount;
-                    _missRayCount += addedMisses;
+                    _missRayCount = oldMissRayCount + addedMisses;
                 }
             }
 

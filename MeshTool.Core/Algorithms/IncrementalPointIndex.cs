@@ -9,13 +9,15 @@ namespace MeshTool.Core.Algorithms
         private readonly Dictionary<long, List<Vertex>> _grid = new Dictionary<long, List<Vertex>>();
         private readonly double _cellSize;
         private readonly double _minSq;
+        private readonly bool _refreshExistingSpawnTime;
 
-        public IncrementalPointIndex(IEnumerable<Vertex> existingPoints, double minDistance)
+        public IncrementalPointIndex(IEnumerable<Vertex> existingPoints, double minDistance, bool refreshExistingSpawnTime = true)
         {
             if (minDistance <= 0) throw new ArgumentOutOfRangeException(nameof(minDistance));
 
             _cellSize = minDistance * 4;
             _minSq = minDistance * minDistance;
+            _refreshExistingSpawnTime = refreshExistingSpawnTime;
 
             foreach (var p in existingPoints)
                 AddToGrid(p);
@@ -37,7 +39,7 @@ namespace MeshTool.Core.Algorithms
             if (IsTooClose(candidate, out var existing))
             {
                 // Update spawn time of existing point to keep it "fresh"
-                if (existing != null && candidate.SpawnTime > existing.SpawnTime)
+                if (_refreshExistingSpawnTime && existing != null && candidate.SpawnTime > existing.SpawnTime)
                 {
                     existing.SpawnTime = candidate.SpawnTime;
                 }

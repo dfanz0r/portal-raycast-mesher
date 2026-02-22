@@ -78,7 +78,7 @@ namespace MeshTool.Core.IO
 
             var gate = new object();
 
-            var pointIndex = new IncrementalPointIndex(masterPoints, Settings.MIN_MERGE_DISTANCE);
+            var pointIndex = new IncrementalPointIndex(masterPoints, Settings.MIN_MERGE_DISTANCE, refreshExistingSpawnTime: false);
 
             long processedLines = 0;
             long baselineFileLines = 0;

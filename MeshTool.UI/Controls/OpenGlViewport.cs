@@ -396,7 +396,12 @@ namespace MeshTool.UI.Controls
 
         private void AppendHoverGrid(MeshTool.Core.Data.Vertex[] points, float avgDistance)
         {
-            _hoverCellSize = MathF.Max(avgDistance * 2.0f, 0.25f);
+            // Keep a stable cell size for incremental appends. Changing it here would
+            // invalidate previously inserted bucket keys unless we rebuild the whole grid.
+            if (_hoverGrid.Count == 0)
+            {
+                _hoverCellSize = MathF.Max(avgDistance * 2.0f, 0.25f);
+            }
             for (int i = 0; i < points.Length; i++)
             {
                 AddPointToHoverGrid(points[i]);

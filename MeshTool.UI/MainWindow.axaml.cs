@@ -830,13 +830,6 @@ public partial class MainWindow : Window
                     Log($"[MESH] Removed {removedBoundary} weak boundary triangles.");
                 }
 
-                int removedSkinny = 0;
-                allTriangles = DelaunayMesher.FilterHighAspectRatioTriangles(allTriangles, Settings.MAX_TRIANGLE_ASPECT_RATIO, out removedSkinny);
-                if (removedSkinny > 0)
-                {
-                    Log($"[MESH] Removed {removedSkinny} skinny triangles (aspect > {Settings.MAX_TRIANGLE_ASPECT_RATIO:F1}).");
-                }
-
                 Log($"[MESH] Final Triangle Count: {allTriangles.Count}");
                 sw.Stop();
                 Log($"[DONE] Total Processing Time: {sw.Elapsed.TotalSeconds:F2}s");
@@ -898,6 +891,18 @@ public partial class MainWindow : Window
         {
             Log($"[DB] Loading {_dbPath}");
             DatabaseIO.LoadDatabase(_dbPath, out var masterPoints, out var masterMisses);
+
+            // Loaded DB content should render as baseline data; only monitor-session additions animate as "new".
+            for (int i = 0; i < masterPoints.Count; i++)
+            {
+                masterPoints[i].SpawnTime = 0f;
+            }
+            for (int i = 0; i < masterMisses.Count; i++)
+            {
+                var ray = masterMisses[i];
+                ray.SpawnTime = 0f;
+                masterMisses[i] = ray;
+            }
 
             if (masterPoints.Count < 3)
             {

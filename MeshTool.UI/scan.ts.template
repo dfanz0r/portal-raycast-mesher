@@ -67,6 +67,16 @@ let done = false;
 let beginScan = false;
 let avgTerrainY = (ytop + ybot) * 0.5;
 let terrainYSampleCount = 0;
+let raySequence = 0;
+
+function fract(v: number): number {
+    return v - Math.floor(v);
+}
+
+function hash01(a: number, b: number, c: number, d: number): number {
+    const n = Math.sin((a * 12.9898) + (b * 78.233) + (c * 37.719) + (d * 19.913)) * 43758.5453;
+    return fract(n);
+}
 
 function CheckAndLogCurrentMap(): void {
     if (mod.IsCurrentMap(mod.Maps.Abbasid)) { console.log("Current Map: Abbasid (Siege of Cairo)"); return; }
@@ -174,6 +184,7 @@ export function OnGameModeStarted(): void {
 }
 
 function fireRay(x: number, z: number, phase: Phase, step: number): void {
+    const seq = raySequence++;
     let jitterBase = 50;
     let tiltBase = 100;
 
@@ -211,42 +222,50 @@ function fireRay(x: number, z: number, phase: Phase, step: number): void {
     const vx = -Math.sin(yawRad);
     const vz = Math.cos(yawRad);
 
-    const jLocalX = (Math.random() - 0.5) * jitter;
-    const jLocalZ = (Math.random() - 0.5) * jitter;
+    const r0 = hash01(x, z, step, seq + (phase * 11.0));
+    const r1 = hash01(z, x, step * 0.73, seq * 0.37 + (phase * 7.0));
+    const r2 = hash01(x + z, step, seq * 0.11, phase * 13.0);
+    const diskRadius = Math.sqrt(r0) * (jitter * 0.5);
+    const diskAngle = (r1 * Math.PI * 2.0) + (seq * 2.399963229728653); // golden-angle decorrelation
+    const jLocalX = Math.cos(diskAngle) * diskRadius;
+    const jLocalZ = Math.sin(diskAngle) * diskRadius;
     const jx = x + (ux * jLocalX + vx * jLocalZ);
     const jz = z + (uz * jLocalX + vz * jLocalZ);
 
-    const tiltBias = Math.tan(ScanTiltDeg * Math.PI / 180.0) * Math.abs(ybot - ytop) * 0.5;
-    let localTx = (Math.random() - 0.5) * 2 * tilt + tiltBias;
-    let localTz = (Math.random() - 0.5) * 2 * tilt;
+    const effectiveTiltDeg = phase === Phase.QuadTreeSearch ? 0 : ScanTiltDeg;
+    const absYSpan = Math.abs(ybot - ytop);
+    const desiredOffsetMag = Math.tan(Math.abs(effectiveTiltDeg) * Math.PI / 180.0) * absYSpan;
 
-    if (Math.abs(expectedScale) < 1e-6) {
-        localTx = 0;
-        localTz = 0;
-    } else {
-        let minTx = (-segmentHalf - jLocalX) / expectedScale;
-        let maxTx = (segmentHalf - jLocalX) / expectedScale;
-        if (minTx > maxTx) {
-            const swap = minTx;
-            minTx = maxTx;
-            maxTx = swap;
+    let dirLocalX = 0;
+    let dirLocalZ = 0;
+    if (desiredOffsetMag > 1e-6) {
+        const signX = effectiveTiltDeg >= 0 ? 1 : -1;
+        const preferredAngle = signX > 0 ? 0 : Math.PI;
+        const spread = Math.PI * 0.55;
+        const tiltAngle = preferredAngle + ((r2 - 0.5) * spread);
+        // Bias toward local X while still allowing angled variation.
+        dirLocalX = Math.cos(tiltAngle) * 1.2;
+        dirLocalZ = Math.sin(tiltAngle) * 0.85;
+        const dLen = Math.sqrt((dirLocalX * dirLocalX) + (dirLocalZ * dirLocalZ));
+        if (dLen > 1e-6) {
+            dirLocalX /= dLen;
+            dirLocalZ /= dLen;
         }
-        localTx = clamp(localTx, minTx, maxTx);
-
-        let minTz = (-segmentHalf - jLocalZ) / expectedScale;
-        let maxTz = (segmentHalf - jLocalZ) / expectedScale;
-        if (minTz > maxTz) {
-            const swap = minTz;
-            minTz = maxTz;
-            maxTz = swap;
-        }
-        localTz = clamp(localTz, minTz, maxTz);
     }
 
-    const tx = ux * localTx + vx * localTz;
-    const tz = uz * localTx + vz * localTz;
+    const dLocalX = dirLocalX * desiredOffsetMag;
+    const dLocalZ = dirLocalZ * desiredOffsetMag;
+    const dWorldX = ux * dLocalX + vx * dLocalZ;
+    const dWorldZ = uz * dLocalX + vz * dLocalZ;
 
-    const p = new RayParams(jx - tx, ytop, jz - tz, jx + tx, ybot, jz + tz, phase);
+    // Anchor to in-cell jitter point and solve endpoints so the ray crosses that point
+    // at the expected terrain height ratio t.
+    const sx = jx - (t * dWorldX);
+    const sz = jz - (t * dWorldZ);
+    const ex = jx + ((1 - t) * dWorldX);
+    const ez = jz + ((1 - t) * dWorldZ);
+
+    const p = new RayParams(sx, ytop, sz, ex, ybot, ez, phase);
     queue.push(p);
     mod.RayCast(mod.CreateVector(p.sx, p.sy, p.sz), mod.CreateVector(p.ex, p.ey, p.ez));
 }
