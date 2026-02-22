@@ -25,4 +25,8 @@
   <ItemGroup>
     <ProjectReference Include="..\MeshTool.Core\MeshTool.Core.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="scan.ts.template" />
+  </ItemGroup>
 </Project>
