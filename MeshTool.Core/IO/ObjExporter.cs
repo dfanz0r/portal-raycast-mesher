@@ -10,54 +10,49 @@ namespace MeshTool.Core.IO
     {
         public static void ExportObj(List<Vertex> vertices, List<Triangle> triangles, string path)
         {
-            // Assign IDs
-            for (int i = 0; i < vertices.Count; i++)
+            var exportVertices = new List<Vertex>(vertices.Count);
+            var indexByKey = new Dictionary<(long, long, long, long, long, long), int>(vertices.Count);
+
+            static long Q(double v) => (long)Math.Round(v * 10000.0, MidpointRounding.AwayFromZero);
+
+            (long, long, long, long, long, long) Key(Vertex v) =>
+                (Q(v.Position.X), Q(v.Position.Y), Q(v.Position.Z), Q(v.Normal.X), Q(v.Normal.Y), Q(v.Normal.Z));
+
+            int GetOrAddIndex(Vertex v)
             {
-                vertices[i].ID = i + 1;
+                var key = Key(v);
+                if (indexByKey.TryGetValue(key, out int idx))
+                {
+                    return idx;
+                }
+
+                exportVertices.Add(v);
+                idx = exportVertices.Count; // OBJ indices are 1-based
+                indexByKey[key] = idx;
+                return idx;
             }
 
-            // Verify the IDs got set correctly
-            int zeroIdCount = 0;
-            int zeroPosCount = 0;
-            int zeroNormalCount = 0;
-
-            foreach (var v in vertices)
+            var faces = new List<(int A, int B, int C)>(triangles.Count);
+            for (int i = 0; i < triangles.Count; i++)
             {
-                if (Math.Abs(v.Position.X) < 1e-9 && Math.Abs(v.Position.Y) < 1e-9 && Math.Abs(v.Position.Z) < 1e-9) zeroPosCount++;
-                if (Math.Abs(v.Normal.X) < 1e-9 && Math.Abs(v.Normal.Y) < 1e-9 && Math.Abs(v.Normal.Z) < 1e-9) zeroNormalCount++;
-            }
-
-            foreach (var t in triangles)
-            {
-                if (t.A.ID == 0) zeroIdCount++;
-                if (t.B.ID == 0) zeroIdCount++;
-                if (t.C.ID == 0) zeroIdCount++;
-            }
-
-            if (zeroIdCount > 0)
-            {
-                Console.WriteLine($"[EXPORT WARNING] {zeroIdCount} triangle vertices have ID=0!");
-            }
-            if (zeroPosCount > 0)
-            {
-                Console.WriteLine($"[EXPORT WARNING] {zeroPosCount} vertices have ZERO POSITION (0,0,0)!");
-            }
-            if (zeroNormalCount > 0)
-            {
-                Console.WriteLine($"[EXPORT WARNING] {zeroNormalCount} vertices have ZERO NORMAL (0,0,0)!");
+                var t = triangles[i];
+                int a = GetOrAddIndex(t.A);
+                int b = GetOrAddIndex(t.B);
+                int c = GetOrAddIndex(t.C);
+                faces.Add((a, b, c));
             }
 
             using (StreamWriter sw = new StreamWriter(path))
             {
-                sw.WriteLine($"# Vertices: {vertices.Count}");
-                foreach (var v in vertices)
+                sw.WriteLine($"# Vertices: {exportVertices.Count}");
+                foreach (var v in exportVertices)
                 {
                     sw.WriteLine(string.Format(CultureInfo.InvariantCulture, "v {0:F4} {1:F4} {2:F4}", v.Position.X, v.Position.Y, v.Position.Z));
                     sw.WriteLine(string.Format(CultureInfo.InvariantCulture, "vn {0:F4} {1:F4} {2:F4}", v.Normal.X, v.Normal.Y, v.Normal.Z));
                 }
-                foreach (var t in triangles)
+                foreach (var f in faces)
                 {
-                    sw.WriteLine($"f {t.A.ID}//{t.A.ID} {t.B.ID}//{t.B.ID} {t.C.ID}//{t.C.ID}");
+                    sw.WriteLine($"f {f.A}//{f.A} {f.B}//{f.B} {f.C}//{f.C}");
                 }
             }
             Console.WriteLine($"[EXPORT] Saved {Path.GetFullPath(path)}");
