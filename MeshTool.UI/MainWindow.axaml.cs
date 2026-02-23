@@ -142,7 +142,6 @@ public partial class MainWindow : Window
         TxtScanYBottom.Text = s.YBottom.ToString("F2", CultureInfo.InvariantCulture);
         TxtScanYaw.Text = s.YawDegrees.ToString("F2", CultureInfo.InvariantCulture);
         TxtScanRayTilt.Text = s.RayTiltDegrees.ToString("F2", CultureInfo.InvariantCulture);
-        TxtScanProbeCell.Text = s.ProbeCellSize.ToString("F2", CultureInfo.InvariantCulture);
         SldScanDensity.Value = CellToDensity(s.ProbeCellSize);
         SldFineDensity.Value = FineStepToDensity(_finePhaseTargetStep);
         UpdateDensityMetersLabels(s.ProbeCellSize, _finePhaseTargetStep);
@@ -200,8 +199,7 @@ public partial class MainWindow : Window
             !TryParseFloat(TxtScanYTop, out var yTop) ||
             !TryParseFloat(TxtScanYBottom, out var yBottom) ||
             !TryParseFloat(TxtScanYaw, out var yaw) ||
-            !TryParseFloat(TxtScanRayTilt, out var tilt) ||
-            !TryParseFloat(TxtScanProbeCell, out var cell))
+            !TryParseFloat(TxtScanRayTilt, out var tilt))
         {
             if (logErrors)
             {
@@ -210,6 +208,7 @@ public partial class MainWindow : Window
             return false;
         }
 
+        float cell = Viewport.ScanVolume.ProbeCellSize;
         settings = new ScanVolumeSettings(cx, cz, sx, sz, yTop, yBottom, yaw, tilt, cell).Sanitize();
         return true;
     }
@@ -1240,7 +1239,6 @@ public partial class MainWindow : Window
         TxtScanYBottom.IsEnabled = enabled;
         TxtScanYaw.IsEnabled = enabled;
         TxtScanRayTilt.IsEnabled = enabled;
-        TxtScanProbeCell.IsEnabled = enabled;
         SldScanDensity.IsEnabled = enabled;
         SldFineDensity.IsEnabled = enabled;
         BtnResetScanVolume.IsEnabled = enabled;

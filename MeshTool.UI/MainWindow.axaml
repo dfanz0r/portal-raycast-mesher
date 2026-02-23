@@ -90,18 +90,13 @@
                         <TextBox Classes="scanValue" x:Name="TxtScanRayTilt" Grid.Column="4" Watermark="Deg" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
                     </Grid>
 
-                    <Grid ColumnDefinitions="54,44,*" ColumnSpacing="4">
-                        <TextBlock Grid.Column="0" Text="Probe" Foreground="LightGray" VerticalAlignment="Center"/>
-                        <Border Grid.Column="1" Tag="ProbeCell" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Cell" Foreground="#D1D5DB" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <TextBox Classes="scanValue" x:Name="TxtScanProbeCell" Grid.Column="2" Watermark="Meters" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
-                    </Grid>
                 </StackPanel>
-                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="4">
+                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="3">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Broad Phase Density" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <Slider Grid.Row="0" Grid.Column="1" x:Name="SldScanDensity" Minimum="0" Maximum="1" Value="0.5" ValueChanged="SldScanDensity_ValueChanged" ToolTip.Tip="Higher = denser broad phase seeds (smaller probe cell)"/>
+                    <Slider Grid.Row="0" Grid.Column="1" x:Name="SldScanDensity" Margin="0,-8,0,0" VerticalAlignment="Center" Minimum="0" Maximum="1" Value="0.5" ValueChanged="SldScanDensity_ValueChanged" ToolTip.Tip="Higher = denser broad phase seeds (smaller probe cell)"/>
                     <TextBlock Grid.Row="0" Grid.Column="2" x:Name="TxtBroadDensityMeters" Text="--- m" Foreground="#A7F3D0" VerticalAlignment="Center" FontFamily="Consolas"/>
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="Fine Phase Density" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <Slider Grid.Row="1" Grid.Column="1" x:Name="SldFineDensity" Minimum="0" Maximum="1" Value="0.75" ValueChanged="SldFineDensity_ValueChanged" ToolTip.Tip="Higher = denser fine phase refinement (smaller target step)"/>
+                    <Slider Grid.Row="1" Grid.Column="1" x:Name="SldFineDensity" Margin="0,-8,0,0" VerticalAlignment="Center" Minimum="0" Maximum="1" Value="0.75" ValueChanged="SldFineDensity_ValueChanged" ToolTip.Tip="Higher = denser fine phase refinement (smaller target step)"/>
                     <TextBlock Grid.Row="1" Grid.Column="2" x:Name="TxtFineDensityMeters" Text="--- m" Foreground="#93C5FD" VerticalAlignment="Center" FontFamily="Consolas"/>
                 </Grid>
                 <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
