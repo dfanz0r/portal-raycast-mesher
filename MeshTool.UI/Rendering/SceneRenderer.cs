@@ -2636,7 +2636,7 @@ namespace MeshTool.UI.Rendering
             {
                 bool isActive = activeHandle == id;
                 bool isHover = hoverHandle == id;
-                float alpha = isActive ? 1.0f : (isHover ? 0.78f : 0.20f);
+                float alpha = (isActive || isHover) ? 1.0f : 0.20f;
 
                 float cr = r;
                 float cg = g;
@@ -2819,8 +2819,10 @@ namespace MeshTool.UI.Rendering
                 var centerMid = new Vector3D<float>(s.CenterX, midY, s.CenterZ);
                 var xAxis = Vector3D.Normalize(new Vector3D<float>(MathF.Cos(yaw), 0f, MathF.Sin(yaw)));
                 var zAxis = Vector3D.Normalize(new Vector3D<float>(-MathF.Sin(yaw), 0f, MathF.Cos(yaw)));
-                float rotateRadius = Math.Clamp(MathF.Min(hx, hz) * 0.25f, 30f, 600f);
                 float rotateHandleOffset = hx + MathF.Max(40f, MathF.Min(hx, hz) * 0.35f);
+                float moveOffset = MathF.Max(20f, MathF.Min(hx, hz) * 0.35f);
+                float rotateRadiusBase = Math.Clamp(MathF.Min(hx, hz) * 0.25f, 30f, 600f);
+                float rotateRadius = MathF.Max(rotateRadiusBase, moveOffset + MathF.Max(20f, MathF.Min(hx, hz) * 0.12f));
                 var hXPos = centerMid + xAxis * hx;
                 var hXNeg = centerMid - xAxis * hx;
                 var hZPos = centerMid + zAxis * hz;
@@ -2828,7 +2830,6 @@ namespace MeshTool.UI.Rendering
                 var hTop = new Vector3D<float>(s.CenterX, s.YTop, s.CenterZ);
                 var hBottom = new Vector3D<float>(s.CenterX, s.YBottom, s.CenterZ);
                 var hRotate = centerMid + xAxis * rotateHandleOffset;
-                float moveOffset = MathF.Max(20f, MathF.Min(hx, hz) * 0.35f);
                 var hMoveX = centerMid + xAxis * moveOffset;
                 var hMoveZ = centerMid + zAxis * moveOffset;
 
@@ -2836,15 +2837,12 @@ namespace MeshTool.UI.Rendering
                 const float redG = 0.24f;
                 const float redB = 0.24f;
 
-                AddLine(centerMid, hXPos, redR, redG, redB);
-                AddLine(centerMid, hXNeg, redR, redG, redB);
-                AddLine(centerMid, hZPos, 0.3f, 0.5f, 1.0f);
-                AddLine(centerMid, hZNeg, 0.3f, 0.5f, 1.0f);
-                AddLine(centerMid, hTop, 0.2f, 0.95f, 0.4f);
-                AddLine(centerMid, hBottom, 0.2f, 0.95f, 0.4f);
-                AddLine(centerMid, hRotate, 1.0f, 0.6f, 0.1f);
-                AddLine(centerMid, hMoveX, redR, redG, redB);
-                AddLine(centerMid, hMoveZ, 0.15f, 0.45f, 1.0f);
+                (float R, float G, float B) LineColorFor(int handleId, float r, float g, float b)
+                {
+                    if (activeHandle == handleId) return (1.0f, 0.95f, 0.25f);
+                    if (hoverHandle == handleId) return (1.0f, 1.0f, 1.0f);
+                    return (r, g, b);
+                }
 
                 float ringRadius = rotateRadius;
                 const int ringSegments = 40;
@@ -2852,6 +2850,12 @@ namespace MeshTool.UI.Rendering
                 float ringR = (activeHandle == 8 || hoverHandle == 8) ? 1.0f : 1.0f;
                 float ringG = (activeHandle == 8) ? 0.95f : (hoverHandle == 8 ? 1.0f : 0.6f);
                 float ringB = (activeHandle == 8) ? 0.25f : (hoverHandle == 8 ? 1.0f : 0.1f);
+                var rotateLineStart = centerMid + xAxis * (ringRadius * ringScale);
+                AddLine(rotateLineStart, hRotate, ringR, ringG, ringB);
+                var moveXLine = LineColorFor(9, redR, redG, redB);
+                var moveZLine = LineColorFor(10, 0.15f, 0.45f, 1.0f);
+                AddLine(centerMid, hMoveX, moveXLine.R, moveXLine.G, moveXLine.B);
+                AddLine(centerMid, hMoveZ, moveZLine.R, moveZLine.G, moveZLine.B);
                 for (int i = 0; i < ringSegments; i++)
                 {
                     float a0 = (i / (float)ringSegments) * MathF.PI * 2f;
