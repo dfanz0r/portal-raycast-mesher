@@ -10,6 +10,10 @@ namespace MeshTool.UI.Rendering
         public float Yaw { get; private set; } = MathF.PI * 1.25f;
         public float MoveSpeed { get; set; } = 120.0f;
 
+        private Vector3D<float> _targetPosition = new Vector3D<float>(0, 50, 150);
+        private float _targetMoveSpeed = 120.0f;
+        private bool _isLerping = false;
+
         public Matrix4X4<float> GetViewMatrix()
         {
             var forward = GetForward();
@@ -50,6 +54,7 @@ namespace MeshTool.UI.Rendering
 
         public void Move(float forward, float right, float up, float deltaSeconds, bool sprint)
         {
+            _isLerping = false; // Cancel lerp on manual move
             var fwd = GetForward();
             var rightVec = Vector3D.Normalize(Vector3D.Cross(fwd, new Vector3D<float>(0, 1, 0)));
             var upVec = new Vector3D<float>(0, 1, 0);
@@ -57,6 +62,7 @@ namespace MeshTool.UI.Rendering
             float speed = MoveSpeed * (sprint ? 3.0f : 1.0f);
             var velocity = (fwd * forward + rightVec * right + upVec * up) * speed * deltaSeconds;
             Position += velocity;
+            _targetPosition = Position;
         }
 
         public void Zoom(float delta)
@@ -70,8 +76,36 @@ namespace MeshTool.UI.Rendering
         {
             float radius = MathF.Max(10.0f, MathF.Max(extents.X, MathF.Max(extents.Y, extents.Z)) * 0.8f);
             var forward = GetForward();
-            Position = center - forward * (radius * 2.5f);
-            MoveSpeed = MathF.Max(20.0f, radius * 0.5f);
+            _targetPosition = center - forward * (radius * 2.5f);
+            _targetMoveSpeed = MathF.Max(20.0f, radius * 0.5f);
+            
+            // If we are extremely far, just snap to avoid a 10 minute lerp
+            if (Vector3D.Distance(Position, _targetPosition) > radius * 50.0f)
+            {
+                Position = _targetPosition;
+                MoveSpeed = _targetMoveSpeed;
+            }
+            else
+            {
+                _isLerping = true;
+            }
+        }
+
+        public bool UpdateLerp(float dt)
+        {
+            if (!_isLerping) return false;
+
+            float lerpFactor = 1.0f - MathF.Exp(-10.0f * dt); // smooth exponential decay
+            Position = Vector3D.Lerp(Position, _targetPosition, lerpFactor);
+            MoveSpeed = MoveSpeed + (_targetMoveSpeed - MoveSpeed) * lerpFactor;
+
+            if (Vector3D.DistanceSquared(Position, _targetPosition) < 0.01f)
+            {
+                Position = _targetPosition;
+                MoveSpeed = _targetMoveSpeed;
+                _isLerping = false;
+            }
+            return true;
         }
 
         public (Vector3D<float> Origin, Vector3D<float> Direction) GetRay(float mouseX, float mouseY, float screenWidth, float screenHeight)

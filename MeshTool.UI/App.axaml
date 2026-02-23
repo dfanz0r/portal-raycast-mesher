@@ -4,7 +4,188 @@
              RequestedThemeVariant="Default">
              <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
 
+    <Application.Resources>
+        <!-- Dark Engine Theme Palette -->
+        <Color x:Key="EngineBgColor">#1E1E1E</Color>
+        <Color x:Key="EnginePanelBgColor">#252526</Color>
+        <Color x:Key="EngineBorderColor">#3C3C3C</Color>
+        <Color x:Key="EngineAccentColor">#007ACC</Color>
+        <Color x:Key="EngineAccentHoverColor">#0098FF</Color>
+        <Color x:Key="EngineTextColor">#CCCCCC</Color>
+        <Color x:Key="EngineTextLightColor">#E0E0E0</Color>
+        <Color x:Key="EngineControlBgColor">#333333</Color>
+        <Color x:Key="EngineControlHoverBgColor">#3F3F46</Color>
+        <Color x:Key="EngineControlPressedBgColor">#1C97EA</Color>
+
+        <!-- Solid Color Brushes -->
+        <SolidColorBrush x:Key="EngineBgBrush" Color="{StaticResource EngineBgColor}"/>
+        <SolidColorBrush x:Key="EnginePanelBgBrush" Color="{StaticResource EnginePanelBgColor}"/>
+        <SolidColorBrush x:Key="EngineBorderBrush" Color="{StaticResource EngineBorderColor}"/>
+        <SolidColorBrush x:Key="EngineAccentBrush" Color="{StaticResource EngineAccentColor}"/>
+        <SolidColorBrush x:Key="EngineAccentHoverBrush" Color="{StaticResource EngineAccentHoverColor}"/>
+        <SolidColorBrush x:Key="EngineTextBrush" Color="{StaticResource EngineTextColor}"/>
+        <SolidColorBrush x:Key="EngineTextLightBrush" Color="{StaticResource EngineTextLightColor}"/>
+        <SolidColorBrush x:Key="EngineControlBgBrush" Color="{StaticResource EngineControlBgColor}"/>
+        <SolidColorBrush x:Key="EngineControlHoverBgBrush" Color="{StaticResource EngineControlHoverBgColor}"/>
+        <SolidColorBrush x:Key="EngineControlPressedBgBrush" Color="{StaticResource EngineControlPressedBgColor}"/>
+    </Application.Resources>
+
     <Application.Styles>
         <FluentTheme />
+        <!-- Set requested theme globally to Dark -->
+        
+        <!-- Base Button Style for Engine UI -->
+        <Style Selector="Button">
+            <Setter Property="Background" Value="{StaticResource EngineControlBgBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource EngineTextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="MinHeight" Value="26"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.1"/>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.1"/>
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource EngineControlHoverBgBrush}"/>
+            <Setter Property="BorderBrush" Value="#555555"/>
+            <Setter Property="TextBlock.Foreground" Value="{StaticResource EngineTextLightBrush}"/>
+        </Style>
+        <Style Selector="Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#177CBF"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineAccentBrush}"/>
+            <Setter Property="TextBlock.Foreground" Value="White"/>
+        </Style>
+        <Style Selector="Button:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Opacity" Value="0.4"/>
+            <Setter Property="Background" Value="{StaticResource EngineControlBgBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineBorderBrush}"/>
+        </Style>
+
+        <!-- Accent Button Style -->
+        <Style Selector="Button.accent">
+            <Setter Property="Background" Value="{StaticResource EngineAccentBrush}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineAccentHoverBrush}"/>
+        </Style>
+        <Style Selector="Button.accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource EngineAccentHoverBrush}"/>
+            <Setter Property="BorderBrush" Value="#4AAFFF"/>
+        </Style>
+
+        <!-- Base TextBox Style -->
+        <Style Selector="TextBox">
+            <Setter Property="Background" Value="{StaticResource EngineBgBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource EngineTextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="MinHeight" Value="24"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.15"/>
+                    <BrushTransition Property="Background" Duration="0:0:0.15"/>
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+            <Setter Property="BorderBrush" Value="{StaticResource EngineControlHoverBgBrush}"/>
+        </Style>
+        <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+            <Setter Property="BorderBrush" Value="{StaticResource EngineAccentBrush}"/>
+            <Setter Property="Background" Value="{StaticResource EnginePanelBgBrush}"/>
+        </Style>
+        <Style Selector="TextBox:disabled /template/ Border#PART_BorderElement">
+            <Setter Property="Opacity" Value="0.5"/>
+        </Style>
+
+        <!-- Base CheckBox Style -->
+        <Style Selector="CheckBox">
+            <Setter Property="Foreground" Value="{StaticResource EngineTextLightBrush}"/>
+            <Setter Property="Padding" Value="6,0,0,0"/>
+            <Setter Property="MinHeight" Value="24"/>
+        </Style>
+        <Style Selector="CheckBox /template/ Border#NormalRectangle">
+            <Setter Property="Background" Value="{StaticResource EngineControlBgBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.1"/>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.1"/>
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="CheckBox:pointerover /template/ Border#NormalRectangle">
+            <Setter Property="Background" Value="{StaticResource EngineControlHoverBgBrush}"/>
+            <Setter Property="BorderBrush" Value="#555555"/>
+        </Style>
+        <Style Selector="CheckBox:checked /template/ Border#NormalRectangle">
+            <Setter Property="Background" Value="{StaticResource EngineAccentBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineAccentHoverBrush}"/>
+        </Style>
+        <!-- The checkmark itself -->
+        <Style Selector="CheckBox:checked /template/ Path#CheckGlyph">
+            <Setter Property="Fill" Value="White"/>
+            <Setter Property="Width" Value="9"/>
+            <Setter Property="Opacity" Value="1"/>
+        </Style>
+
+        <!-- Base TextBlock Style default to engine text color -->
+        <Style Selector="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource EngineTextBrush}"/>
+        </Style>
+
+        <!-- Base Slider Style -->
+        <Style Selector="Slider">
+            <Setter Property="Foreground" Value="{StaticResource EngineAccentBrush}"/>
+            <Setter Property="Background" Value="{StaticResource EngineControlBgBrush}"/>
+            <Setter Property="Opacity" Value="0.9"/>
+        </Style>
+        <Style Selector="Slider:pointerover">
+            <Setter Property="Opacity" Value="1.0"/>
+        </Style>
+        <Style Selector="Slider /template/ Track#PART_Track > RepeatButton#PART_DecreaseButton /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="{StaticResource EngineAccentBrush}"/>
+            <Setter Property="CornerRadius" Value="2"/>
+        </Style>
+        <Style Selector="Slider /template/ Track#PART_Track > RepeatButton#PART_IncreaseButton /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="{StaticResource EngineControlHoverBgBrush}"/>
+            <Setter Property="CornerRadius" Value="2"/>
+        </Style>
+        <Style Selector="Slider /template/ Thumb">
+            <Setter Property="Background" Value="{StaticResource EngineTextLightBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineBorderBrush}"/>
+            <Setter Property="Width" Value="14"/>
+            <Setter Property="Height" Value="14"/>
+        </Style>
+        <Style Selector="Slider:pointerover /template/ Thumb">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineAccentBrush}"/>
+        </Style>
+
+        <!-- Base ComboBox Style -->
+        <Style Selector="ComboBox">
+            <Setter Property="Background" Value="{StaticResource EngineControlBgBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource EngineTextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="MinHeight" Value="28"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="ComboBox:pointerover /template/ Border#Background">
+            <Setter Property="Background" Value="{StaticResource EngineControlHoverBgBrush}"/>
+            <Setter Property="BorderBrush" Value="#555555"/>
+        </Style>
     </Application.Styles>
 </Application>

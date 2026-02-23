@@ -1458,6 +1458,12 @@ public partial class MainWindow : Window
         Viewport.Invalidate();
     }
 
+    private void ChkDynamicColor_Changed(object? sender, RoutedEventArgs e)
+    {
+        Viewport.UseDynamicColorMapping = ChkDynamicColor.IsChecked ?? false;
+        Viewport.Invalidate();
+    }
+
     private void SldSurfelSize_ValueChanged(object? sender, Avalonia.Controls.Primitives.RangeBaseValueChangedEventArgs e)
     {
         Viewport.SurfelScale = (float)SldSurfelSize.Value;

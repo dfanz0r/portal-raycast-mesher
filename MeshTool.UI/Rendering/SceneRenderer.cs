@@ -20,7 +20,7 @@ namespace MeshTool.UI.Rendering
         private OpenGlViewport _viewport;
         private uint _vaoPoints, _vboInstances;
         private uint _vaoSurfels, _vboSurfelVerts;
-        private uint _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRayAccum, _shaderProgramRayReveal, _shaderProgramGridAccum, _shaderProgramGridReveal, _shaderProgramComposite, _shaderProgramMesh, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints, _shaderProgramFlatColor;
+        private uint _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRayAccum, _shaderProgramRayReveal, _shaderProgramGridAccum, _shaderProgramGridReveal, _shaderProgramComposite, _shaderProgramMesh, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints, _shaderProgramFlatColor, _shaderProgramGizmoAccum, _shaderProgramGizmoReveal, _shaderProgramFlatAccum, _shaderProgramFlatReveal;
         private uint _vaoRays, _vboRays;
         private uint _vaoMesh, _vboMesh;
         private uint _vaoGrid, _vboGrid;
@@ -72,9 +72,12 @@ namespace MeshTool.UI.Rendering
         public bool ShowScanHandles { get; set; } = true;
         public bool ShowScanDensityPreview { get; set; } = true;
         public float ScanFineTargetStep { get; set; } = 24f;
+        public bool UseDynamicColorMapping { get; set; } = false;
         private ScanVolumeSettings _scanVolume = ScanVolumeSettings.Default;
         private int _hoverScanHandle;
         private int _activeScanHandle;
+        private float _minPointY = float.MaxValue;
+        private float _maxPointY = float.MinValue;
         private bool _showSelectionBox;
         private Vector3D<float> _selectionStartWorld;
         private Vector3D<float> _selectionEndWorld;
@@ -151,36 +154,59 @@ namespace MeshTool.UI.Rendering
                 layout (location = 2) in float aSelected;
                 uniform mat4 uView;
                 uniform mat4 uProjection;
+                
+                out vec3 WorldPos;
                 out vec3 Normal;
                 out float Selected;
                 void main() {
                     gl_Position = uProjection * uView * vec4(aPos, 1.0);
-                    // Reverse Z: map z from [-1, 1] to [1, 0] for gl_FragDepth
-                    // gl_Position.z is in clip space, after perspective divide it will be in NDC [-1, 1]
-                    // But OpenGL expects depth in [0, 1]. We want near=1, far=0.
-                    // The projection matrix already maps near to 1 and far to -1 in NDC.
-                    // So we need to map NDC [-1, 1] to depth [0, 1].
-                    // Actually, gl_Position.z / gl_Position.w is NDC.
-                    // OpenGL maps NDC z to depth using: depth = (z_ndc + 1) / 2
-                    // If z_ndc is 1 (near), depth = 1. If z_ndc is -1 (far), depth = 0.
-                    // This is exactly what we want for reverse Z!
+                    // Reverse Z
                     gl_PointSize = 4.0;
+                    WorldPos = aPos;
                     Normal = aNormal;
                     Selected = aSelected;
                 }";
             string fsPoint = @"#version 300 es
                 precision highp float;
+                in vec3 WorldPos;
                 in vec3 Normal;
                 in float Selected;
+                
+                uniform float uUseDynamicColor;
+                uniform float uWorldMinY;
+                uniform float uWorldMaxY;
+                
                 out vec4 FragColor;
+
+                vec3 colormap(float t) {
+                    const vec3 c0 = vec3(0.277, 0.005, 0.334);
+                    const vec3 c1 = vec3(0.198, 0.410, 0.551);
+                    const vec3 c2 = vec3(0.122, 0.638, 0.518);
+                    const vec3 c3 = vec3(0.395, 0.812, 0.347);
+                    const vec3 c4 = vec3(0.993, 0.906, 0.144);
+                    
+                    if (t < 0.25) return mix(c0, c1, t / 0.25);
+                    if (t < 0.5) return mix(c1, c2, (t - 0.25) / 0.25);
+                    if (t < 0.75) return mix(c2, c3, (t - 0.5) / 0.25);
+                    return mix(c3, c4, (t - 0.75) / 0.25);
+                }
+
                 void main() {
                     vec3 n = length(Normal) > 0.0001 ? normalize(Normal) : vec3(0.0, 1.0, 0.0);
                     vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
                     float lambert = max(dot(n, lightDir), 0.2);
-                    vec3 base = mix(vec3(0.7, 0.8, 1.0), abs(n), 0.65);
+                    
+                    vec3 base;
                     if (Selected > 0.5) {
                         base = vec3(1.0, 0.62, 0.12);
+                    } else if (uUseDynamicColor > 0.5) {
+                        float range = max(0.001, uWorldMaxY - uWorldMinY);
+                        float normalizedHeight = clamp((WorldPos.y - uWorldMinY) / range, 0.0, 1.0);
+                        base = colormap(normalizedHeight);
+                    } else {
+                        base = mix(vec3(0.7, 0.8, 1.0), abs(n), 0.65);
                     }
+                    
                     FragColor = vec4(base * lambert, 1.0);
                 }";
             _shaderProgramPoints = CreateProgram(vsPoint, fsPoint);
@@ -200,9 +226,26 @@ namespace MeshTool.UI.Rendering
                 uniform float uCurrentTime;
                 uniform vec3 uHoveredPos;
                 uniform float uHasHovered;
+                uniform float uUseDynamicColor; // Optional Color Mapping Toggle
+                uniform float uWorldMinY; // Bounds minimum Y
+                uniform float uWorldMaxY; // Bounds maximum Y
 
                 out vec3 Normal;
                 out vec3 Color;
+
+                // Simple viridis approximation
+                vec3 colormap(float t) {
+                    const vec3 c0 = vec3(0.277, 0.005, 0.334);
+                    const vec3 c1 = vec3(0.198, 0.410, 0.551);
+                    const vec3 c2 = vec3(0.122, 0.638, 0.518);
+                    const vec3 c3 = vec3(0.395, 0.812, 0.347);
+                    const vec3 c4 = vec3(0.993, 0.906, 0.144);
+                    
+                    if (t < 0.25) return mix(c0, c1, t / 0.25);
+                    if (t < 0.5) return mix(c1, c2, (t - 0.25) / 0.25);
+                    if (t < 0.75) return mix(c2, c3, (t - 0.5) / 0.25);
+                    return mix(c3, c4, (t - 0.75) / 0.25);
+                }
 
                 void main() {
                     vec3 norm = normalize(iNormal);
@@ -224,6 +267,11 @@ namespace MeshTool.UI.Rendering
                         Color = vec3(1.0, 0.62, 0.12); // Selected
                     } else if (uHasHovered > 0.5 && length(iPos - uHoveredPos) < 0.001) {
                         Color = vec3(1.0, 0.0, 1.0); // Magenta
+                    } else if (uUseDynamicColor > 0.5) {
+                        // Semantic Color Mapping Mode (Height-Based Viridis)
+                        float range = max(0.001, uWorldMaxY - uWorldMinY);
+                        float normalizedHeight = clamp((iPos.y - uWorldMinY) / range, 0.0, 1.0);
+                        Color = colormap(normalizedHeight);
                     } else if (iSpawnTime <= 0.0 || age > 5.0 || age < 0.0) {
                         Color = vec3(0.0, 0.7, 1.0); // Cyan
                     } else {
@@ -395,28 +443,65 @@ namespace MeshTool.UI.Rendering
                 layout (location = 0) in vec3 aPos;
                 layout (location = 1) in vec3 aNormal;
                 layout (location = 2) in vec3 aColor;
+                layout (location = 3) in float aAlpha;
                 uniform mat4 uView;
                 uniform mat4 uProjection;
-                out vec3 vNormal;
+                out vec3 vNormalWorld;
                 out vec3 vColor;
+                out float vAlpha;
                 void main() {
                     gl_Position = uProjection * uView * vec4(aPos, 1.0);
-                    vNormal = aNormal;
+                    vNormalWorld = normalize(aNormal);
                     vColor = aColor;
+                    vAlpha = aAlpha;
                 }";
             string fsGizmoSolid = @"#version 300 es
                 precision highp float;
-                in vec3 vNormal;
+                in vec3 vNormalWorld;
                 in vec3 vColor;
+                in float vAlpha;
                 out vec4 FragColor;
                 void main() {
-                    vec3 n = normalize(vNormal);
-                    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
+                    if (vAlpha < 0.999) discard;
+                    vec3 n = normalize(vNormalWorld);
+                    vec3 lightDir = normalize(vec3(0.35, 0.85, 0.4));
                     float diff = max(dot(n, lightDir), 0.2);
                     vec3 c = clamp(vColor * diff, 0.0, 1.0);
                     FragColor = vec4(c, 1.0);
                 }";
             _shaderProgramGizmoSolid = CreateProgram(vsGizmoSolid, fsGizmoSolid);
+
+            string fsGizmoAccum = @"#version 300 es
+                precision highp float;
+                in vec3 vNormalWorld;
+                in vec3 vColor;
+                in float vAlpha;
+                out vec4 FragColor;
+                void main() {
+                    if (vAlpha >= 0.999) discard;
+                    vec3 n = normalize(vNormalWorld);
+                    vec3 lightDir = normalize(vec3(0.35, 0.85, 0.4));
+                    float diff = max(dot(n, lightDir), 0.2);
+                    vec3 c = clamp(vColor * diff, 0.0, 1.0);
+                    float alpha = clamp(vAlpha, 0.0, 1.0);
+                    if (alpha < 0.001) discard;
+
+                    float z = gl_FragCoord.z;
+                    float weight = clamp(alpha * 1e4 * pow(z, 4.0), 1e-2, 3e3);
+                    FragColor = vec4(c * alpha * weight, alpha * weight);
+                }";
+            string fsGizmoReveal = @"#version 300 es
+                precision highp float;
+                in float vAlpha;
+                out vec4 FragColor;
+                void main() {
+                    if (vAlpha >= 0.999) discard;
+                    float alpha = clamp(vAlpha, 0.0, 1.0);
+                    if (alpha < 0.001) discard;
+                    FragColor = vec4(alpha, alpha, alpha, alpha);
+                }";
+            _shaderProgramGizmoAccum = CreateProgram(vsGizmoSolid, fsGizmoAccum);
+            _shaderProgramGizmoReveal = CreateProgram(vsGizmoSolid, fsGizmoReveal);
 
             // --- MESH SHADER ---
             string vsMesh = @"#version 300 es
@@ -603,6 +688,30 @@ namespace MeshTool.UI.Rendering
                     FragColor = uColor;
                 }";
             _shaderProgramFlatColor = CreateProgram(vsFlatColor, fsFlatColor);
+
+            string fsFlatAccum = @"#version 300 es
+                precision highp float;
+                uniform vec4 uColor;
+                out vec4 FragColor;
+                void main() {
+                    float alpha = clamp(uColor.a, 0.0, 1.0);
+                    if (alpha < 0.001) discard;
+
+                    float z = gl_FragCoord.z;
+                    float weight = clamp(alpha * 1e4 * pow(z, 4.0), 1e-2, 3e3);
+                    FragColor = vec4(uColor.rgb * alpha * weight, alpha * weight);
+                }";
+            string fsFlatReveal = @"#version 300 es
+                precision highp float;
+                uniform vec4 uColor;
+                out vec4 FragColor;
+                void main() {
+                    float alpha = clamp(uColor.a, 0.0, 1.0);
+                    if (alpha < 0.001) discard;
+                    FragColor = vec4(alpha, alpha, alpha, alpha);
+                }";
+            _shaderProgramFlatAccum = CreateProgram(vsFlatColor, fsFlatAccum);
+            _shaderProgramFlatReveal = CreateProgram(vsFlatColor, fsFlatReveal);
         }
 
         private unsafe uint CreateProgram(string vsSource, string fsSource)
@@ -779,13 +888,15 @@ namespace MeshTool.UI.Rendering
             _vboScanHandles = _gl.GenBuffer();
             _gl.BindVertexArray(_vaoScanHandles);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboScanHandles);
-            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(2048 * 9 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 9 * sizeof(float), (void*)0);
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(4096 * 10 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)0);
             _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 9 * sizeof(float), (void*)(3 * sizeof(float)));
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)(3 * sizeof(float)));
             _gl.EnableVertexAttribArray(1);
-            _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 9 * sizeof(float), (void*)(6 * sizeof(float)));
+            _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)(6 * sizeof(float)));
             _gl.EnableVertexAttribArray(2);
+            _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)(9 * sizeof(float)));
+            _gl.EnableVertexAttribArray(3);
 
             // 9. Scan density preview VAO (dynamic points)
             _vaoScanDensity = _gl.GenVertexArray();
@@ -872,6 +983,10 @@ namespace MeshTool.UI.Rendering
             _gl.DeleteProgram(_shaderProgramGizmoSolid);
             _gl.DeleteProgram(_shaderProgramDensityPoints);
             _gl.DeleteProgram(_shaderProgramFlatColor);
+            _gl.DeleteProgram(_shaderProgramGizmoAccum);
+            _gl.DeleteProgram(_shaderProgramGizmoReveal);
+            _gl.DeleteProgram(_shaderProgramFlatAccum);
+            _gl.DeleteProgram(_shaderProgramFlatReveal);
             _gl.Dispose();
         }
 
@@ -1175,6 +1290,9 @@ namespace MeshTool.UI.Rendering
                             vertices[i * 8 + 5] = nz;
                             vertices[i * 8 + 6] = points[i].SpawnTime;
                             vertices[i * 8 + 7] = _selectedPointIndices.Contains(i) ? 1f : 0f;
+
+                            if (points[i].Position.Y < _minPointY) _minPointY = (float)points[i].Position.Y;
+                            if (points[i].Position.Y > _maxPointY) _maxPointY = (float)points[i].Position.Y;
                         }
 
                         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
@@ -1339,10 +1457,12 @@ namespace MeshTool.UI.Rendering
                             vertices[i * 8 + 1] = (float)newPoints[i].Position.Y;
                             vertices[i * 8 + 2] = (float)newPoints[i].Position.Z;
                             vertices[i * 8 + 3] = nx;
-                            vertices[i * 8 + 4] = ny;
                             vertices[i * 8 + 5] = nz;
                             vertices[i * 8 + 6] = newPoints[i].SpawnTime;
                             vertices[i * 8 + 7] = _selectedPointIndices.Contains(pointIndex) ? 1f : 0f;
+
+                            if (newPoints[i].Position.Y < _minPointY) _minPointY = (float)newPoints[i].Position.Y;
+                            if (newPoints[i].Position.Y > _maxPointY) _maxPointY = (float)newPoints[i].Position.Y;
                         }
 
                         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
@@ -1797,6 +1917,14 @@ namespace MeshTool.UI.Rendering
                 // Force unbind element array buffer in case it was bound elsewhere
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, 0);
 
+                int dynColLocP = _gl.GetUniformLocation(_shaderProgramPoints, "uUseDynamicColor");
+                _gl.Uniform1(dynColLocP, UseDynamicColorMapping ? 1.0f : 0.0f);
+
+                int minLocP = _gl.GetUniformLocation(_shaderProgramPoints, "uWorldMinY");
+                int maxLocP = _gl.GetUniformLocation(_shaderProgramPoints, "uWorldMaxY");
+                _gl.Uniform1(minLocP, _minPointY);
+                _gl.Uniform1(maxLocP, _maxPointY);
+
                 _gl.DrawArrays(PrimitiveType.Points, 0, (uint)_pointCount);
             }
 
@@ -1823,6 +1951,14 @@ namespace MeshTool.UI.Rendering
                 {
                     _gl.Uniform1(hasHoveredLoc, 0.0f);
                 }
+
+                int dynColLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uUseDynamicColor");
+                _gl.Uniform1(dynColLoc, UseDynamicColorMapping ? 1.0f : 0.0f);
+
+                int minLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uWorldMinY");
+                int maxLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uWorldMaxY");
+                _gl.Uniform1(minLoc, _minPointY);
+                _gl.Uniform1(maxLoc, _maxPointY);
 
                 _gl.BindVertexArray(_vaoSurfels);
                 _gl.DrawArraysInstanced(PrimitiveType.Triangles, 0, (uint)_surfelVertexCount, (uint)_pointCount);
@@ -1870,7 +2006,8 @@ namespace MeshTool.UI.Rendering
                 {
                     if (ShowScanDensityPreview && _scanDensityVertexCount > 0)
                     {
-                        _gl.Disable(EnableCap.DepthTest);
+                        _gl.Enable(EnableCap.DepthTest);
+                        _gl.DepthFunc(DepthFunction.Greater);
                         _gl.DepthMask(false);
                         _gl.Enable(EnableCap.Blend);
                         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
@@ -1907,24 +2044,10 @@ namespace MeshTool.UI.Rendering
                     _gl.Enable(EnableCap.DepthTest);
                     _gl.DepthFunc(DepthFunction.Greater);
 
-                    if (_selectionFillVertexCount > 0)
-                    {
-                        _gl.DepthMask(false);
-                        _gl.Enable(EnableCap.Blend);
-                        _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-                        _gl.UseProgram(_shaderProgramFlatColor);
-                        SetUniforms(_shaderProgramFlatColor, view, proj);
-                        int colorLoc = _gl.GetUniformLocation(_shaderProgramFlatColor, "uColor");
-                        _gl.Uniform4(colorLoc, 0.88f, 0.42f, 1.0f, 0.16f);
-                        _gl.BindVertexArray(_vaoSelectionFill);
-                        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_selectionFillVertexCount);
-                        _gl.Disable(EnableCap.Blend);
-                        _gl.DepthMask(true);
-                    }
-
                     if (ShowScanVolume && ShowScanHandles && _scanHandleVertexCount > 0)
                     {
                         _gl.DepthMask(true);
+                        _gl.Disable(EnableCap.Blend);
                         _gl.Disable(EnableCap.CullFace);
                         _gl.UseProgram(_shaderProgramGizmoSolid);
                         SetUniforms(_shaderProgramGizmoSolid, view, proj);
@@ -1949,7 +2072,9 @@ namespace MeshTool.UI.Rendering
             bool hasMissRays = _viewport.ShowMissRays && _missRayCount > 0;
             bool hasNormalRays = _viewport.ShowNormalRays && _pointCount > 0;
             bool hasRays = hasMissRays || hasNormalRays;
-            bool hasWboit = hasRays || _viewport.ShowGrid;
+            bool hasSelectionFill = _selectionFillVertexCount > 0;
+            bool hasScanHandlePlanes = ShowScanVolume && ShowScanHandles && _scanHandleVertexCount > 0;
+            bool hasWboit = hasRays || _viewport.ShowGrid || hasSelectionFill || hasScanHandlePlanes;
 
             if (hasWboit)
             {
@@ -1991,6 +2116,28 @@ namespace MeshTool.UI.Rendering
                     }
                 }
 
+                if (hasSelectionFill)
+                {
+                    _gl.UseProgram(_shaderProgramFlatAccum);
+                    SetUniforms(_shaderProgramFlatAccum, view, proj);
+                    int colorLocAccum = _gl.GetUniformLocation(_shaderProgramFlatAccum, "uColor");
+                    _gl.Uniform4(colorLocAccum, 0.88f, 0.42f, 1.0f, 0.16f);
+                    _gl.Enable(EnableCap.CullFace);
+                    _gl.CullFace(TriangleFace.Back);
+                    _gl.BindVertexArray(_vaoSelectionFill);
+                    _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_selectionFillVertexCount);
+                    _gl.Disable(EnableCap.CullFace);
+                }
+
+                if (hasScanHandlePlanes)
+                {
+                    _gl.UseProgram(_shaderProgramGizmoAccum);
+                    SetUniforms(_shaderProgramGizmoAccum, view, proj);
+                    _gl.Disable(EnableCap.CullFace);
+                    _gl.BindVertexArray(_vaoScanHandles);
+                    _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_scanHandleVertexCount);
+                }
+
                 // OIT pass B (revealage) in dedicated MSAA FBO
                 _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaRevealFbo);
                 _gl.ClearColor(1f, 1f, 1f, 1f);
@@ -2021,6 +2168,28 @@ namespace MeshTool.UI.Rendering
                     {
                         _gl.DrawArrays(PrimitiveType.Lines, _missRayCount * 2, (uint)(_pointCount * 2));
                     }
+                }
+
+                if (hasSelectionFill)
+                {
+                    _gl.UseProgram(_shaderProgramFlatReveal);
+                    SetUniforms(_shaderProgramFlatReveal, view, proj);
+                    int colorLocReveal = _gl.GetUniformLocation(_shaderProgramFlatReveal, "uColor");
+                    _gl.Uniform4(colorLocReveal, 0.88f, 0.42f, 1.0f, 0.16f);
+                    _gl.Enable(EnableCap.CullFace);
+                    _gl.CullFace(TriangleFace.Back);
+                    _gl.BindVertexArray(_vaoSelectionFill);
+                    _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_selectionFillVertexCount);
+                    _gl.Disable(EnableCap.CullFace);
+                }
+
+                if (hasScanHandlePlanes)
+                {
+                    _gl.UseProgram(_shaderProgramGizmoReveal);
+                    SetUniforms(_shaderProgramGizmoReveal, view, proj);
+                    _gl.Disable(EnableCap.CullFace);
+                    _gl.BindVertexArray(_vaoScanHandles);
+                    _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_scanHandleVertexCount);
                 }
 
                 _gl.Disable(EnableCap.Blend);
@@ -2162,8 +2331,8 @@ namespace MeshTool.UI.Rendering
         private unsafe void UpdateScanHandleBuffer()
         {
             var s = _scanVolume.Sanitize();
-            float[] data = BuildScanHandleSolidVertices(s, _hoverScanHandle, _activeScanHandle);
-            _scanHandleVertexCount = data.Length / 9;
+            float[] data = BuildScanHandleSolidVertices(s, _hoverScanHandle, _activeScanHandle, _viewport.Camera.Position);
+            _scanHandleVertexCount = data.Length / 10;
 
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboScanHandles);
             fixed (float* v = data)
@@ -2308,7 +2477,7 @@ namespace MeshTool.UI.Rendering
             return (verts.ToArray(), broadCount);
         }
 
-        private static float[] BuildScanHandleSolidVertices(ScanVolumeSettings s, int hoverHandle, int activeHandle)
+        private static float[] BuildScanHandleSolidVertices(ScanVolumeSettings s, int hoverHandle, int activeHandle, Vector3D<float> camPos)
         {
             float hx = s.SizeX * 0.5f;
             float hz = s.SizeZ * 0.5f;
@@ -2331,7 +2500,10 @@ namespace MeshTool.UI.Rendering
             var hMoveX = centerMid + xAxis * moveOffset;
             var hMoveZ = centerMid + zAxis * moveOffset;
 
-            float baseSize = MathF.Max(7f, MathF.Min(hx, hz) * 0.06f);
+            // Compute a base size that scales with camera distance to maintain visual consistency
+            float distToCamera = (centerMid - camPos).Length;
+            float baseSize = Math.Clamp(distToCamera * 0.02f, 0.5f, 400f);
+            
             const float redR = 0.965f;
             const float redG = 0.24f;
             const float redB = 0.24f;
@@ -2344,7 +2516,7 @@ namespace MeshTool.UI.Rendering
                 return (r, g, b, 1.0f);
             }
 
-            void AddTri(Vector3D<float> a, Vector3D<float> b, Vector3D<float> c, float r, float g, float bl)
+            void AddTri(Vector3D<float> a, Vector3D<float> b, Vector3D<float> c, float r, float g, float bl, float alpha = 1.0f)
             {
                 var n = Vector3D.Normalize(Vector3D.Cross(b - a, c - a));
                 void Emit(Vector3D<float> p)
@@ -2352,33 +2524,22 @@ namespace MeshTool.UI.Rendering
                     verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
                     verts.Add(n.X); verts.Add(n.Y); verts.Add(n.Z);
                     verts.Add(r); verts.Add(g); verts.Add(bl);
+                    verts.Add(alpha);
                 }
                 Emit(a); Emit(b); Emit(c);
             }
 
-            void AddOrientedBox(Vector3D<float> c, Vector3D<float> bx, Vector3D<float> by, Vector3D<float> bz, float half, float r, float g, float bl)
+            void AddTriWithNormal(Vector3D<float> a, Vector3D<float> b, Vector3D<float> c, Vector3D<float> n, float r, float g, float bl, float alpha = 1.0f)
             {
-                bx = Vector3D.Normalize(bx);
-                by = Vector3D.Normalize(by);
-                bz = Vector3D.Normalize(bz);
-
-                Vector3D<float> Corner(float sx, float sy, float sz) => c + (bx * (sx * half)) + (by * (sy * half)) + (bz * (sz * half));
-
-                var p000 = Corner(-1, -1, -1);
-                var p001 = Corner(-1, -1, 1);
-                var p010 = Corner(-1, 1, -1);
-                var p011 = Corner(-1, 1, 1);
-                var p100 = Corner(1, -1, -1);
-                var p101 = Corner(1, -1, 1);
-                var p110 = Corner(1, 1, -1);
-                var p111 = Corner(1, 1, 1);
-
-                AddTri(p001, p101, p111, r, g, bl); AddTri(p001, p111, p011, r, g, bl); // +Z
-                AddTri(p100, p000, p010, r, g, bl); AddTri(p100, p010, p110, r, g, bl); // -Z
-                AddTri(p000, p001, p011, r, g, bl); AddTri(p000, p011, p010, r, g, bl); // -X
-                AddTri(p101, p100, p110, r, g, bl); AddTri(p101, p110, p111, r, g, bl); // +X
-                AddTri(p010, p011, p111, r, g, bl); AddTri(p010, p111, p110, r, g, bl); // +Y
-                AddTri(p000, p100, p101, r, g, bl); AddTri(p000, p101, p001, r, g, bl); // -Y
+                n = Vector3D.Normalize(n);
+                void Emit(Vector3D<float> p)
+                {
+                    verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
+                    verts.Add(n.X); verts.Add(n.Y); verts.Add(n.Z);
+                    verts.Add(r); verts.Add(g); verts.Add(bl);
+                    verts.Add(alpha);
+                }
+                Emit(a); Emit(b); Emit(c);
             }
 
             void AddCone(Vector3D<float> baseCenter, Vector3D<float> dir, float length, float radius, float r, float g, float bl)
@@ -2395,6 +2556,7 @@ namespace MeshTool.UI.Rendering
                     verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
                     verts.Add(n.X); verts.Add(n.Y); verts.Add(n.Z);
                     verts.Add(cr); verts.Add(cg); verts.Add(cb);
+                    verts.Add(1.0f);
                 }
 
                 for (int i = 0; i < segments; i++)
@@ -2431,6 +2593,7 @@ namespace MeshTool.UI.Rendering
                         verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
                         verts.Add(n.X); verts.Add(n.Y); verts.Add(n.Z);
                         verts.Add(r); verts.Add(g); verts.Add(bl);
+                        verts.Add(1.0f);
                     }
 
                     Emit(a);
@@ -2469,18 +2632,46 @@ namespace MeshTool.UI.Rendering
                 }
             }
 
-            void AddScaleHandle(int id, Vector3D<float> pos, float r, float g, float bl, float sizeMul = 1.0f)
+            void AddPlaneHandle(int id, Vector3D<float> center, Vector3D<float> axisU, Vector3D<float> axisV, float halfU, float halfV, float r, float g, float bl)
             {
-                var st = StyleFor(id, r, g, bl);
-                AddOrientedBox(
-                    pos,
-                    xAxis,
-                    new Vector3D<float>(0, 1, 0),
-                    zAxis,
-                    baseSize * 0.85f * sizeMul * st.Scale,
-                    st.R,
-                    st.G,
-                    st.B);
+                bool isActive = activeHandle == id;
+                bool isHover = hoverHandle == id;
+                float alpha = isActive ? 1.0f : (isHover ? 0.78f : 0.20f);
+
+                float cr = r;
+                float cg = g;
+                float cb = bl;
+                if (isActive || isHover)
+                {
+                    float boost = isActive ? 1.75f : 1.55f;
+                    cr = Math.Clamp(cr * boost, 0f, 1f);
+                    cg = Math.Clamp(cg * boost, 0f, 1f);
+                    cb = Math.Clamp(cb * boost, 0f, 1f);
+
+                    // Keep the dominant channel vivid (especially red/blue handles).
+                    float maxC = MathF.Max(cr, MathF.Max(cg, cb));
+                    if (maxC > 1e-5f)
+                    {
+                        float inv = 1.0f / maxC;
+                        cr = Math.Clamp(cr * inv, 0f, 1f);
+                        cg = Math.Clamp(cg * inv, 0f, 1f);
+                        cb = Math.Clamp(cb * inv, 0f, 1f);
+                    }
+                }
+                float hu = halfU;
+                float hv = halfV;
+                var u = Vector3D.Normalize(axisU);
+                var v = Vector3D.Normalize(axisV);
+                var p00 = center - u * hu - v * hv;
+                var p01 = center - u * hu + v * hv;
+                var p10 = center + u * hu - v * hv;
+                var p11 = center + u * hu + v * hv;
+
+                var lightDir = Vector3D.Normalize(new Vector3D<float>(0.5f, 1.0f, 0.5f));
+                AddTriWithNormal(p00, p10, p11, lightDir, cr, cg, cb, alpha);
+                AddTriWithNormal(p00, p11, p01, lightDir, cr, cg, cb, alpha);
+                AddTriWithNormal(p00, p01, p11, lightDir, cr, cg, cb, alpha);
+                AddTriWithNormal(p00, p11, p10, lightDir, cr, cg, cb, alpha);
             }
 
             void AddMoveHandle(int id, Vector3D<float> pos, Vector3D<float> axis, float r, float g, float bl, float sizeMul = 1.0f)
@@ -2497,12 +2688,38 @@ namespace MeshTool.UI.Rendering
             }
 
             AddRotateHandle(1, centerMid, 1.0f, 1.0f, 0.2f);
-            AddScaleHandle(2, hXPos, redR, redG, redB);
-            AddScaleHandle(3, hXNeg, redR, redG, redB);
-            AddScaleHandle(4, hZPos, 0.3f, 0.5f, 1.0f);
-            AddScaleHandle(5, hZNeg, 0.3f, 0.5f, 1.0f);
-            AddScaleHandle(6, hTop, 0.2f, 0.95f, 0.4f);
-            AddScaleHandle(7, hBottom, 0.2f, 0.95f, 0.4f);
+            float ySpan = MathF.Max(8f, s.YTop - s.YBottom);
+            float sharedFaceMin = MathF.Min(MathF.Min(2f * hx, 2f * hz), ySpan);
+            float sharedSquareHalf = MathF.Max(24f, sharedFaceMin / 3f);
+            float faceOffset = 0.75f;
+
+            bool IsFaceVisible(Vector3D<float> faceCenter, Vector3D<float> outwardNormal)
+            {
+                var toCam = camPos - faceCenter;
+                return Vector3D.Dot(outwardNormal, toCam) > 0.0f;
+            }
+
+            var xPosCenter = hXPos - xAxis * faceOffset;
+            var xNegCenter = hXNeg + xAxis * faceOffset;
+            var zPosCenter = hZPos - zAxis * faceOffset;
+            var zNegCenter = hZNeg + zAxis * faceOffset;
+
+            if (IsFaceVisible(xPosCenter, xAxis))
+                AddPlaneHandle(2, xPosCenter, zAxis, new Vector3D<float>(0, 1, 0), sharedSquareHalf, sharedSquareHalf, redR, redG, redB);
+            if (IsFaceVisible(xNegCenter, -xAxis))
+                AddPlaneHandle(3, xNegCenter, zAxis, new Vector3D<float>(0, 1, 0), sharedSquareHalf, sharedSquareHalf, redR, redG, redB);
+            if (IsFaceVisible(zPosCenter, zAxis))
+                AddPlaneHandle(4, zPosCenter, xAxis, new Vector3D<float>(0, 1, 0), sharedSquareHalf, sharedSquareHalf, 0.3f, 0.5f, 1.0f);
+            if (IsFaceVisible(zNegCenter, -zAxis))
+                AddPlaneHandle(5, zNegCenter, xAxis, new Vector3D<float>(0, 1, 0), sharedSquareHalf, sharedSquareHalf, 0.3f, 0.5f, 1.0f);
+
+            var yUp = new Vector3D<float>(0, 1, 0);
+            var topCenter = hTop - yUp * faceOffset;
+            var bottomCenter = hBottom + yUp * faceOffset;
+            if (IsFaceVisible(topCenter, yUp))
+                AddPlaneHandle(6, topCenter, xAxis, zAxis, sharedSquareHalf, sharedSquareHalf, 0.2f, 0.95f, 0.4f);
+            if (IsFaceVisible(bottomCenter, -yUp))
+                AddPlaneHandle(7, bottomCenter, xAxis, zAxis, sharedSquareHalf, sharedSquareHalf, 0.2f, 0.95f, 0.4f);
             AddRotateHandle(8, hRotate, 1.0f, 0.6f, 0.1f);
             AddMoveHandle(9, hMoveX, xAxis, redR, redG, redB, 0.95f);
             AddMoveHandle(10, hMoveZ, zAxis, 0.225f, 0.475f, 1.0f, 0.95f);
@@ -2585,6 +2802,15 @@ namespace MeshTool.UI.Rendering
                 }
                 var up = Vector3D.Normalize(Vector3D.Cross(side, dir));
                 float head = MathF.Max(12f, arrowLen * 0.08f);
+                
+                // Add thicker directional helper lines
+                for (int m = -1; m <= 1; m++) 
+                {
+                    var offsetDir = side * (0.5f * m);
+                    var offsetUp = up * (0.5f * m);
+                    AddLine(start + offsetDir + offsetUp, end + offsetDir + offsetUp, 1.0f, 0.6f, 0.1f);
+                }
+
                 AddLine(end, end - dir * head + side * (head * 0.5f), 1.0f, 0.6f, 0.1f);
                 AddLine(end, end - dir * head - side * (head * 0.5f), 1.0f, 0.6f, 0.1f);
                 AddLine(end, end - dir * head + up * (head * 0.35f), 1.0f, 0.6f, 0.1f);

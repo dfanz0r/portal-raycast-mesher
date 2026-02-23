@@ -52,6 +52,7 @@ namespace MeshTool.UI.Controls
         public bool ScanVolumeEditEnabled { get; set; } = true;
         public bool ShowScanDensityPreview { get; set; } = true;
         public float ScanFineTargetStep { get; set; } = 24f;
+        public bool UseDynamicColorMapping { get; set; } = false;
         public bool PointSelectionModeEnabled { get; set; } = false;
         public ScanVolumeSettings ScanVolume { get; private set; } = ScanVolumeSettings.Default;
         public int HoverScanHandleId => (int)_hoverScanHandle;
@@ -312,6 +313,8 @@ namespace MeshTool.UI.Controls
             }
 
             bool cameraMoved = UpdateCameraMovement(dt);
+            bool cameraLerped = Camera.UpdateLerp(dt);
+            cameraMoved = cameraMoved || cameraLerped;
 
             if (_isPointSelecting && _selectionWorldValid && _selectionHasTarget)
             {
@@ -320,6 +323,7 @@ namespace MeshTool.UI.Controls
 
             if (_renderer != null)
             {
+                _renderer.UseDynamicColorMapping = UseDynamicColorMapping;
                 _renderer.ShowScanVolume = ShowScanVolume;
                 _renderer.ShowScanHandles = ShowScanHandles;
                 _renderer.ShowScanDensityPreview = ShowScanDensityPreview;
@@ -344,7 +348,7 @@ namespace MeshTool.UI.Controls
 
             bool hasAnimations = _renderer != null && _renderer.HasActiveAnimations();
 
-            if (cameraMoved || hasAnimations || _pressedKeys.Count > 0 || (_isPointSelecting && _selectionHasTarget))
+            if (cameraMoved || cameraLerped || hasAnimations || _pressedKeys.Count > 0 || (_isPointSelecting && _selectionHasTarget))
             {
                 RequestNextFrameRendering();
             }
@@ -668,6 +672,11 @@ namespace MeshTool.UI.Controls
         private float _scanYawStart;
         private float _scanRotateStartAngle;
         private Vector3D<float> _scanMoveAxisWorld;
+        private float _scanAxisPlaneY;
+        private float _scanAxisStartCoord;
+        private float _scanAxisStartCenterX;
+        private float _scanAxisStartCenterZ;
+        private bool _scanAxisDragReady;
         private float _scanScaleStartX;
         private float _scanScaleStartZ;
         private Point _scanScaleStartMouse;
@@ -853,93 +862,145 @@ namespace MeshTool.UI.Controls
         {
             if (Bounds.Width <= 1 || Bounds.Height <= 1) return ScanHandleKind.None;
 
-            var ray = Camera.GetRay((float)pointer.X, (float)pointer.Y, (float)Bounds.Width, (float)Bounds.Height);
+            var p = ClampPointerToViewport(pointer);
+            var ray = Camera.GetRay((float)p.X, (float)p.Y, (float)Bounds.Width, (float)Bounds.Height);
             var s = ScanVolume.Sanitize();
-            float sceneScale = MathF.Max(20f, MathF.Max(s.SizeX, s.SizeZ));
-            float planeTol = MathF.Max(40f, sceneScale * 0.05f);
-            float centerTol = MathF.Max(30f, sceneScale * 0.03f);
 
             float hx = s.SizeX * 0.5f;
             float hz = s.SizeZ * 0.5f;
             float midY = (s.YTop + s.YBottom) * 0.5f;
 
-            if (TryProjectPointerToPlane(midY, pointer, out var onPlane))
+            static bool TryRaySphere(Vector3D<float> origin, Vector3D<float> dir, Vector3D<float> center, float radius, out float t)
             {
-                var local = WorldToScanLocal(s, onPlane);
-                float lx = local.X;
-                float lz = local.Y;
+                t = float.MaxValue;
+                var oc = origin - center;
+                float b = Silk.NET.Maths.Vector3D.Dot(oc, dir);
+                float c = Silk.NET.Maths.Vector3D.Dot(oc, oc) - radius * radius;
+                float h = b * b - c;
+                if (h < 0f) return false;
+                float srt = MathF.Sqrt(h);
+                float t0 = -b - srt;
+                float t1 = -b + srt;
+                if (t0 > 1e-5f) { t = t0; return true; }
+                if (t1 > 1e-5f) { t = t1; return true; }
+                return false;
+            }
 
-                // Allow direct click on the dedicated rotate handle (not only the ring).
-                if (TryGetScanHandlePosition(s, ScanHandleKind.RotateYaw, out var rotateHandleWorld))
-                {
-                    var toHandle = rotateHandleWorld - onPlane;
-                    float handlePlanarDist = MathF.Sqrt(toHandle.X * toHandle.X + toHandle.Z * toHandle.Z);
-                    if (handlePlanarDist <= planeTol * 1.25f)
-                    {
-                        return ScanHandleKind.RotateYaw;
-                    }
-                }
+            static bool TryRayPlaneRect(
+                Vector3D<float> origin,
+                Vector3D<float> dir,
+                Vector3D<float> center,
+                Vector3D<float> normal,
+                Vector3D<float> axisU,
+                Vector3D<float> axisV,
+                float halfU,
+                float halfV,
+                out float t)
+            {
+                t = float.MaxValue;
+                float denom = Silk.NET.Maths.Vector3D.Dot(dir, normal);
+                if (MathF.Abs(denom) < 1e-6f) return false;
+                float hitT = Silk.NET.Maths.Vector3D.Dot(center - origin, normal) / denom;
+                if (hitT <= 1e-5f) return false;
 
-                // Dedicated axis move handles near center.
-                if (TryGetScanHandlePosition(s, ScanHandleKind.MoveXAxis, out var moveXWorld))
-                {
-                    var d = moveXWorld - onPlane;
-                    float dist = MathF.Sqrt(d.X * d.X + d.Z * d.Z);
-                    if (dist <= planeTol * 1.15f)
-                    {
-                        return ScanHandleKind.MoveXAxis;
-                    }
-                }
-                if (TryGetScanHandlePosition(s, ScanHandleKind.MoveZAxis, out var moveZWorld))
-                {
-                    var d = moveZWorld - onPlane;
-                    float dist = MathF.Sqrt(d.X * d.X + d.Z * d.Z);
-                    if (dist <= planeTol * 1.15f)
-                    {
-                        return ScanHandleKind.MoveZAxis;
-                    }
-                }
+                var hit = origin + dir * hitT;
+                var d = hit - center;
+                float u = Silk.NET.Maths.Vector3D.Dot(d, axisU);
+                float v = Silk.NET.Maths.Vector3D.Dot(d, axisV);
+                if (MathF.Abs(u) > halfU || MathF.Abs(v) > halfV) return false;
 
-                if (MathF.Abs(lx) <= centerTol && MathF.Abs(lz) <= centerTol)
-                {
-                    return ScanHandleKind.MoveCenter;
-                }
+                t = hitT;
+                return true;
+            }
 
-                bool nearXEdge = MathF.Abs(MathF.Abs(lx) - hx) <= planeTol && MathF.Abs(lz) <= hz + planeTol;
-                if (nearXEdge)
-                {
-                    return lx >= 0 ? ScanHandleKind.SizeXPos : ScanHandleKind.SizeXNeg;
-                }
+            float yaw = s.YawDegrees * (MathF.PI / 180f);
+            var xAxisW = Silk.NET.Maths.Vector3D.Normalize(new Vector3D<float>(MathF.Cos(yaw), 0f, MathF.Sin(yaw)));
+            var zAxisW = Silk.NET.Maths.Vector3D.Normalize(new Vector3D<float>(-MathF.Sin(yaw), 0f, MathF.Cos(yaw)));
+            var yAxisW = new Vector3D<float>(0f, 1f, 0f);
+            var centerMid = new Vector3D<float>(s.CenterX, midY, s.CenterZ);
 
-                bool nearZEdge = MathF.Abs(MathF.Abs(lz) - hz) <= planeTol && MathF.Abs(lx) <= hx + planeTol;
-                if (nearZEdge)
+            float moveOffset = MathF.Max(20f, MathF.Min(hx, hz) * 0.35f);
+            float rotateHandleOffset = hx + MathF.Max(40f, MathF.Min(hx, hz) * 0.35f);
+            float distToCamera = (centerMid - Camera.Position).Length;
+            float baseSize = Math.Clamp(distToCamera * 0.02f, 0.5f, 400f);
+
+            var hRotateCenter = centerMid;
+            var hRotateYaw = centerMid + xAxisW * rotateHandleOffset;
+            var hMoveX = centerMid + xAxisW * moveOffset;
+            var hMoveZ = centerMid + zAxisW * moveOffset;
+
+            var hXPos = centerMid + xAxisW * hx;
+            var hXNeg = centerMid - xAxisW * hx;
+            var hZPos = centerMid + zAxisW * hz;
+            var hZNeg = centerMid - zAxisW * hz;
+            var hTop = new Vector3D<float>(s.CenterX, s.YTop, s.CenterZ);
+            var hBottom = new Vector3D<float>(s.CenterX, s.YBottom, s.CenterZ);
+
+            float ySpan = MathF.Max(8f, s.YTop - s.YBottom);
+            float sharedFaceMin = MathF.Min(MathF.Min(2f * hx, 2f * hz), ySpan);
+            float sharedSquareHalf = MathF.Max(24f, sharedFaceMin / 3f);
+            float faceOffset = 0.75f;
+
+            var xPosCenter = hXPos - xAxisW * faceOffset;
+            var xNegCenter = hXNeg + xAxisW * faceOffset;
+            var zPosCenter = hZPos - zAxisW * faceOffset;
+            var zNegCenter = hZNeg + zAxisW * faceOffset;
+            var topCenter = hTop - yAxisW * faceOffset;
+            var bottomCenter = hBottom + yAxisW * faceOffset;
+
+            bool IsFaceVisible(Vector3D<float> faceCenter, Vector3D<float> outwardNormal)
+            {
+                var toCam = Camera.Position - faceCenter;
+                return Silk.NET.Maths.Vector3D.Dot(outwardNormal, toCam) > 0.0f;
+            }
+
+            ScanHandleKind bestHandle = ScanHandleKind.None;
+            float bestT = float.MaxValue;
+            int bestPriority = int.MaxValue;
+
+            void Consider(ScanHandleKind k, float t, int priority)
+            {
+                if (t <= 1e-5f) return;
+                if (priority < bestPriority || (priority == bestPriority && t < bestT))
                 {
-                    return lz >= 0 ? ScanHandleKind.SizeZPos : ScanHandleKind.SizeZNeg;
+                    bestPriority = priority;
+                    bestT = t;
+                    bestHandle = k;
                 }
             }
 
-            if (TryGetScanHandlePosition(s, ScanHandleKind.YTop, out var hTop) && TryGetScanHandlePosition(s, ScanHandleKind.YBottom, out var hBottom))
-            {
-                float pointTol = MathF.Max(34f, sceneScale * 0.04f);
+            if (TryRaySphere(ray.Origin, ray.Direction, hRotateCenter, baseSize * 0.95f, out float tRotateCenter))
+                Consider(ScanHandleKind.MoveCenter, tRotateCenter, 0);
+            if (TryRaySphere(ray.Origin, ray.Direction, hRotateYaw, baseSize * 0.95f, out float tRotateYaw))
+                Consider(ScanHandleKind.RotateYaw, tRotateYaw, 0);
 
-                float DistanceToRay(Vector3D<float> p)
-                {
-                    var op = p - ray.Origin;
-                    float t = Silk.NET.Maths.Vector3D.Dot(op, ray.Direction);
-                    if (t < 0f) return float.MaxValue;
-                    var q = ray.Origin + ray.Direction * t;
-                    return (p - q).Length;
-                }
+            float moveScale = 0.95f;
+            float moveRadius = baseSize * 0.75f * moveScale;
+            var moveXTip = hMoveX + xAxisW * (baseSize * 1.1f * moveScale);
+            var moveZTip = hMoveZ + zAxisW * (baseSize * 1.1f * moveScale);
+            if (TryRaySphere(ray.Origin, ray.Direction, hMoveX, moveRadius, out float tMoveX0))
+                Consider(ScanHandleKind.MoveXAxis, tMoveX0, 0);
+            if (TryRaySphere(ray.Origin, ray.Direction, moveXTip, moveRadius * 0.7f, out float tMoveX1))
+                Consider(ScanHandleKind.MoveXAxis, tMoveX1, 0);
+            if (TryRaySphere(ray.Origin, ray.Direction, hMoveZ, moveRadius, out float tMoveZ0))
+                Consider(ScanHandleKind.MoveZAxis, tMoveZ0, 0);
+            if (TryRaySphere(ray.Origin, ray.Direction, moveZTip, moveRadius * 0.7f, out float tMoveZ1))
+                Consider(ScanHandleKind.MoveZAxis, tMoveZ1, 0);
 
-                float dTop = DistanceToRay(hTop);
-                float dBottom = DistanceToRay(hBottom);
-                if (dTop <= pointTol || dBottom <= pointTol)
-                {
-                    return dTop <= dBottom ? ScanHandleKind.YTop : ScanHandleKind.YBottom;
-                }
-            }
+            if (IsFaceVisible(xPosCenter, xAxisW) && TryRayPlaneRect(ray.Origin, ray.Direction, xPosCenter, xAxisW, zAxisW, yAxisW, sharedSquareHalf, sharedSquareHalf, out float tXPos))
+                Consider(ScanHandleKind.SizeXPos, tXPos, 1);
+            if (IsFaceVisible(xNegCenter, -xAxisW) && TryRayPlaneRect(ray.Origin, ray.Direction, xNegCenter, -xAxisW, zAxisW, yAxisW, sharedSquareHalf, sharedSquareHalf, out float tXNeg))
+                Consider(ScanHandleKind.SizeXNeg, tXNeg, 1);
+            if (IsFaceVisible(zPosCenter, zAxisW) && TryRayPlaneRect(ray.Origin, ray.Direction, zPosCenter, zAxisW, xAxisW, yAxisW, sharedSquareHalf, sharedSquareHalf, out float tZPos))
+                Consider(ScanHandleKind.SizeZPos, tZPos, 1);
+            if (IsFaceVisible(zNegCenter, -zAxisW) && TryRayPlaneRect(ray.Origin, ray.Direction, zNegCenter, -zAxisW, xAxisW, yAxisW, sharedSquareHalf, sharedSquareHalf, out float tZNeg))
+                Consider(ScanHandleKind.SizeZNeg, tZNeg, 1);
+            if (IsFaceVisible(topCenter, yAxisW) && TryRayPlaneRect(ray.Origin, ray.Direction, topCenter, yAxisW, xAxisW, zAxisW, sharedSquareHalf, sharedSquareHalf, out float tTop))
+                Consider(ScanHandleKind.YTop, tTop, 1);
+            if (IsFaceVisible(bottomCenter, -yAxisW) && TryRayPlaneRect(ray.Origin, ray.Direction, bottomCenter, -yAxisW, xAxisW, zAxisW, sharedSquareHalf, sharedSquareHalf, out float tBottom))
+                Consider(ScanHandleKind.YBottom, tBottom, 1);
 
-            return ScanHandleKind.None;
+            return bestHandle;
         }
 
         private bool StartScanHandleManipulation(Point pointerPos)
@@ -973,8 +1034,20 @@ namespace MeshTool.UI.Controls
             else if (_activeScanHandle == ScanHandleKind.MoveXAxis || _activeScanHandle == ScanHandleKind.MoveZAxis)
             {
                 _isScanAxisMove = true;
-                GetScanAxes(ScanVolume, out var xAxis, out var zAxis);
+                var s = ScanVolume.Sanitize();
+                GetScanAxes(s, out var xAxis, out var zAxis);
                 _scanMoveAxisWorld = _activeScanHandle == ScanHandleKind.MoveXAxis ? xAxis : zAxis;
+                _scanAxisPlaneY = (s.YTop + s.YBottom) * 0.5f;
+                _scanAxisStartCenterX = s.CenterX;
+                _scanAxisStartCenterZ = s.CenterZ;
+                _scanAxisDragReady = false;
+
+                if (TryProjectPointerToPlane(_scanAxisPlaneY, pointerPos, out var hitAxis))
+                {
+                    var startCenter = new Vector3D<float>(_scanAxisStartCenterX, _scanAxisPlaneY, _scanAxisStartCenterZ);
+                    _scanAxisStartCoord = Silk.NET.Maths.Vector3D.Dot(hitAxis - startCenter, _scanMoveAxisWorld);
+                    _scanAxisDragReady = true;
+                }
             }
             else if (_activeScanHandle == ScanHandleKind.SizeXPos || _activeScanHandle == ScanHandleKind.SizeXNeg ||
                      _activeScanHandle == ScanHandleKind.SizeZPos || _activeScanHandle == ScanHandleKind.SizeZNeg)
@@ -1013,22 +1086,36 @@ namespace MeshTool.UI.Controls
 
             if (_isScanAxisMove)
             {
-                var s = ScanVolume.Sanitize();
-                float midY = (s.YTop + s.YBottom) * 0.5f;
-                var center = new Vector3D<float>(s.CenterX, midY, s.CenterZ);
-
-                var mouseDelta = new Vector2D<float>((float)delta.X, (float)delta.Y);
-                float axisLen = MathF.Max(50f, MathF.Max(s.SizeX, s.SizeZ) * 0.35f);
-                if (TryGetAxisScreenDirection(center, _scanMoveAxisWorld, axisLen, out var axisScreenDir, out var worldPerPixel))
+                if (_scanAxisDragReady && TryProjectPointerToPlane(_scanAxisPlaneY, currentPos, out var hitAxis))
                 {
-                    float deltaAlong = mouseDelta.X * axisScreenDir.X + mouseDelta.Y * axisScreenDir.Y;
-                    float deltaWorld = deltaAlong * worldPerPixel;
+                    var startCenter = new Vector3D<float>(_scanAxisStartCenterX, _scanAxisPlaneY, _scanAxisStartCenterZ);
+                    float currentCoord = Silk.NET.Maths.Vector3D.Dot(hitAxis - startCenter, _scanMoveAxisWorld);
+                    float deltaWorld = currentCoord - _scanAxisStartCoord;
                     var deltaVec = _scanMoveAxisWorld * deltaWorld;
-                    SetScanVolume(s with
+                    SetScanVolume(ScanVolume with
                     {
-                        CenterX = s.CenterX + deltaVec.X,
-                        CenterZ = s.CenterZ + deltaVec.Z
+                        CenterX = _scanAxisStartCenterX + deltaVec.X,
+                        CenterZ = _scanAxisStartCenterZ + deltaVec.Z
                     });
+                }
+                else
+                {
+                    var s = ScanVolume.Sanitize();
+                    float midY = (s.YTop + s.YBottom) * 0.5f;
+                    var center = new Vector3D<float>(s.CenterX, midY, s.CenterZ);
+                    var mouseDelta = new Vector2D<float>((float)delta.X, (float)delta.Y);
+                    float axisLen = MathF.Max(50f, MathF.Max(s.SizeX, s.SizeZ) * 0.35f);
+                    if (TryGetAxisScreenDirection(center, _scanMoveAxisWorld, axisLen, out var axisScreenDir, out var worldPerPixel))
+                    {
+                        float deltaAlong = mouseDelta.X * axisScreenDir.X + mouseDelta.Y * axisScreenDir.Y;
+                        float deltaWorld = deltaAlong * worldPerPixel;
+                        var deltaVec = _scanMoveAxisWorld * deltaWorld;
+                        SetScanVolume(s with
+                        {
+                            CenterX = s.CenterX + deltaVec.X,
+                            CenterZ = s.CenterZ + deltaVec.Z
+                        });
+                    }
                 }
 
                 _lastMousePos = currentPos;
@@ -1192,6 +1279,7 @@ namespace MeshTool.UI.Controls
 
             _isScanDragging = false;
             _isScanAxisMove = false;
+            _scanAxisDragReady = false;
             _isScanRotating = false;
             _isScanScaling = false;
             _isScanHeightAdjust = false;
@@ -1448,6 +1536,7 @@ namespace MeshTool.UI.Controls
             _isLooking = false;
             _isScanDragging = false;
             _isScanAxisMove = false;
+            _scanAxisDragReady = false;
             _isScanRotating = false;
             _isScanScaling = false;
             _isScanHeightAdjust = false;

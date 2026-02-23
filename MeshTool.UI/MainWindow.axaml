@@ -28,16 +28,17 @@
 
     <Grid ColumnDefinitions="320, *">
         <!-- LEFT PANEL: Controls -->
-        <Border Grid.Column="0" Background="#2E2E2E" Padding="10">
+        <Border Grid.Column="0" Background="{StaticResource EnginePanelBgBrush}" BorderBrush="{StaticResource EngineBorderBrush}" BorderThickness="0,0,1,0" Padding="12">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Spacing="8">
-                <TextBlock Text="MeshTool UI" FontSize="18" FontWeight="Bold" Foreground="White" Margin="0,0,0,4"/>
+            <StackPanel Spacing="6">
+                <!-- Header -->
+                <TextBlock Text="MeshTool" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource EngineTextLightBrush}" Margin="0,0,0,4"/>
                 
                 <TextBlock Text="Database Path" Foreground="LightGray" />
                 <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="5" RowSpacing="5">
                     <ComboBox x:Name="CmbDbPath" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" PlaceholderText="Select .db file" SelectionChanged="CmbDbPath_SelectionChanged"/>
                     <Button Grid.Row="0" Grid.Column="1" x:Name="BtnBrowseDb" Content="..." Click="BtnBrowseDb_Click"/>
-                    <Button Grid.Row="0" Grid.Column="2" x:Name="BtnMesh" Content="Load" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnMesh_Click" Classes="accent"/>
+                    <Button Grid.Row="0" Grid.Column="2" x:Name="BtnMesh" Content="Load" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnMesh_Click"/>
 
                     <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" ColumnDefinitions="*,*" ColumnSpacing="6">
                         <Button Grid.Column="0" x:Name="BtnClearDb" Content="Clear DB" Click="BtnClearDb_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Clear all points/rays and overwrite the current DB file"/>
@@ -54,8 +55,8 @@
                     <Button Grid.Row="2" Grid.Column="1" x:Name="BtnSelectionDiscard" Content="Discard Selection" Click="BtnSelectionDiscard_Click" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
                 </Grid>
 
-                <Separator Background="#444" Margin="0,4" Height="1"/>
-                <TextBlock Text="Scan Volume" FontSize="15" FontWeight="SemiBold" Foreground="White"/>
+                <Separator Background="{StaticResource EngineBorderBrush}" Margin="0,4" Height="1"/>
+                <TextBlock Text="Scan Volume" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource EngineTextLightBrush}"/>
                 <StackPanel Spacing="4">
                     <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
                         <TextBlock Grid.Column="0" Text="Center" Foreground="LightGray" VerticalAlignment="Center"/>
@@ -108,7 +109,7 @@
                     <Button x:Name="BtnExportScanTs" Grid.Column="1" Content="Copy Script" Click="BtnExportScanTs_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Copy the portal raycast script based on the current view bounding volume"/>
                 </Grid>
                 
-                <Separator Background="#444" Margin="0,4" Height="1"/>
+                <Separator Background="{StaticResource EngineBorderBrush}" Margin="0,4" Height="1"/>
 
                 <!-- Actions -->
                 <Button x:Name="BtnMonitor" Content="Start Monitor" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnMonitor_Click"/>
@@ -116,11 +117,11 @@
                 <Button x:Name="BtnSaveMesh" Content="Save Mesh..." HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnSaveMesh_Click" IsEnabled="False"/>
                 <ProgressBar x:Name="PrgProcessing" IsIndeterminate="True" IsVisible="False" Height="4" Margin="0,5,0,0"/>
 
-                <Separator Background="#444" Margin="0,4" Height="1"/>
+                <Separator Background="{StaticResource EngineBorderBrush}" Margin="0,4" Height="1"/>
 
                 <!-- Render Settings -->
-                <TextBlock Text="Render Settings" FontSize="15" FontWeight="SemiBold" Foreground="White"/>
-                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="2">
+                <TextBlock Text="Render Settings" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource EngineTextLightBrush}"/>
+                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="2">
                     <CheckBox x:Name="ChkShowPoints" Grid.Row="0" Grid.Column="0" Content="Show Points" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
                     <CheckBox x:Name="ChkShowSurfels" Grid.Row="0" Grid.Column="1" Content="Show Surfels" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
                     <CheckBox x:Name="ChkShowMissRays" Grid.Row="1" Grid.Column="0" Content="Show Miss Rays" IsChecked="False" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
@@ -129,6 +130,7 @@
                     <CheckBox x:Name="ChkShowGrid" Grid.Row="2" Grid.Column="1" Content="Show Grid" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
                     <CheckBox x:Name="ChkShowDensityPreview" Grid.Row="3" Grid.Column="0" Content="Show Density Preview" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
                     <CheckBox x:Name="ChkShowVolume" Grid.Row="3" Grid.Column="1" Content="Show Scan Volume" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
+                    <CheckBox x:Name="ChkDynamicColor" Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Content="Use Dynamic Color Mapping" IsChecked="False" Checked="ChkDynamicColor_Changed" Unchecked="ChkDynamicColor_Changed" Foreground="White"/>
                 </Grid>
                 
                 <TextBlock Text="Surfel Size Multiplier" Foreground="LightGray" Margin="0,4,0,0"/>
@@ -141,9 +143,9 @@
                 <TextBlock Text="Camera Speed:" Foreground="LightGray" Margin="0,4,0,0"/>
                 <TextBlock x:Name="TxtCameraSpeed" Text="---" Foreground="Yellow" FontSize="14" FontFamily="Consolas" FontWeight="Bold"/>
 
-                <Separator Background="#444" Margin="0,4" Height="1"/>
+                <Separator Background="{StaticResource EngineBorderBrush}" Margin="0,4" Height="1"/>
                 <TextBlock Text="Console Output:" Foreground="LightGray" />
-                <ListBox x:Name="LstConsole" Height="110" Background="#1E1E1E" Foreground="LightGreen" FontSize="12" FontFamily="Consolas" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox x:Name="LstConsole" Height="110" Background="{StaticResource EngineBgBrush}" BorderBrush="{StaticResource EngineBorderBrush}" BorderThickness="1" CornerRadius="3" Foreground="LightGreen" FontSize="12" FontFamily="Consolas" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                     <ListBox.Styles>
                         <Style Selector="ListBoxItem">
                             <Setter Property="Padding" Value="5,1"/>
@@ -162,7 +164,7 @@
         </Border>
 
         <!-- RIGHT PANEL: 3D Viewport -->
-        <Border Grid.Column="1" Background="Black">
+        <Border Grid.Column="1" Background="{StaticResource EngineBgBrush}">
             <controls:OpenGlViewport x:Name="Viewport" />
         </Border>
     </Grid>
