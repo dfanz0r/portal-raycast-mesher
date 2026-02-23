@@ -7,7 +7,26 @@
         x:Class="MeshTool.UI.MainWindow"
         Title="MeshTool - 3D Visualizer">
 
-    <Grid ColumnDefinitions="280, *">
+    <Window.Styles>
+        <Style Selector="TextBox.scanValue">
+            <Setter Property="TextAlignment" Value="Right"/>
+            <Setter Property="HorizontalContentAlignment" Value="Right"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="2,0,2,0"/>
+        </Style>
+        <Style Selector="TextBox.scanValue /template/ TextPresenter#PART_TextPresenter">
+            <Setter Property="TextAlignment" Value="Right"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        </Style>
+        <Style Selector="TextBox.scanValue TextPresenter">
+            <Setter Property="TextAlignment" Value="Right"/>
+        </Style>
+        <Style Selector="TextBox.scanValue /template/ ScrollViewer#PART_TextPresenterHost">
+            <Setter Property="HorizontalContentAlignment" Value="Right"/>
+        </Style>
+    </Window.Styles>
+
+    <Grid ColumnDefinitions="320, *">
         <!-- LEFT PANEL: Controls -->
         <Border Grid.Column="0" Background="#2E2E2E" Padding="10">
             <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -15,53 +34,67 @@
                 <TextBlock Text="MeshTool UI" FontSize="18" FontWeight="Bold" Foreground="White" Margin="0,0,0,4"/>
                 
                 <TextBlock Text="Database Path" Foreground="LightGray" />
-                <Grid ColumnDefinitions="*, Auto, Auto" RowDefinitions="Auto,Auto" ColumnSpacing="5" RowSpacing="5">
+                <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="5" RowSpacing="5">
                     <ComboBox x:Name="CmbDbPath" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" PlaceholderText="Select .db file" SelectionChanged="CmbDbPath_SelectionChanged"/>
                     <Button Grid.Row="0" Grid.Column="1" x:Name="BtnBrowseDb" Content="..." Click="BtnBrowseDb_Click"/>
                     <Button Grid.Row="0" Grid.Column="2" x:Name="BtnMesh" Content="Load" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnMesh_Click" Classes="accent"/>
-                    <Button Grid.Row="1" Grid.Column="0" x:Name="BtnNewDb" Content="New Database" Click="BtnNewDb_Click"/>
-                    <Button Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" x:Name="BtnClearDb" Content="Clear Database" Click="BtnClearDb_Click" ToolTip.Tip="Clear all points/rays and overwrite the current DB file"/>
+
+                    <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" ColumnDefinitions="*,*" ColumnSpacing="6">
+                        <Button Grid.Column="0" x:Name="BtnClearDb" Content="Clear DB" Click="BtnClearDb_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Clear all points/rays and overwrite the current DB file"/>
+                        <Button Grid.Column="1" x:Name="BtnNewDb" Content="New DB" Click="BtnNewDb_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+                    </Grid>
+                </Grid>
+
+                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="4">
+                    <CheckBox Grid.Row="0" Grid.Column="0" x:Name="ChkPointSelectMode" Content="Point Selection Mode" Foreground="White" Checked="ChkPointSelectMode_Changed" Unchecked="ChkPointSelectMode_Changed" ToolTip.Tip="Shortcut: G toggles selection mode. Hold Shift while dragging to add multiple areas. Delete removes selected points."/>
+                    <TextBlock Grid.Row="0" Grid.Column="1" x:Name="TxtSelectedPoints" Text="Selected: 0" Foreground="#F5A9FF" VerticalAlignment="Center" HorizontalAlignment="Right" FontFamily="Consolas"/>
+                    <Button Grid.Row="1" Grid.Column="0" x:Name="BtnDeleteSelectedPoints" Content="Delete Selected" Click="BtnDeleteSelectedPoints_Click" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+                    <Button Grid.Row="1" Grid.Column="1" x:Name="BtnClearSelectedPoints" Content="Clear Selected" Click="BtnClearSelectedPoints_Click" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+                    <Button Grid.Row="2" Grid.Column="0" x:Name="BtnSelectionSave" Content="Save Selection" Click="BtnSelectionSave_Click" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+                    <Button Grid.Row="2" Grid.Column="1" x:Name="BtnSelectionDiscard" Content="Discard Selection" Click="BtnSelectionDiscard_Click" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
                 </Grid>
 
                 <Separator Background="#444" Margin="0,4" Height="1"/>
                 <TextBlock Text="Scan Volume" FontSize="15" FontWeight="SemiBold" Foreground="White"/>
-                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="5" RowSpacing="4">
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Center X" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <TextBox x:Name="TxtScanCenterX" Grid.Row="0" Grid.Column="1" Watermark="Center X" TextChanged="ScanVolumeField_TextChanged"/>
-                    <Border Grid.Row="0" Grid.Column="2" Tag="CenterX" Background="#3A3A3A" CornerRadius="3" Padding="6,2" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="⇆" Foreground="White"/></Border>
+                <StackPanel Spacing="4">
+                    <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
+                        <TextBlock Grid.Column="0" Text="Center" Foreground="LightGray" VerticalAlignment="Center"/>
+                        <Border Grid.Column="1" Tag="CenterX" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="X" Foreground="#F87171" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                        <TextBox Classes="scanValue" x:Name="TxtScanCenterX" Grid.Column="2" Watermark="X" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
+                        <Border Grid.Column="3" Tag="CenterZ" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Z" Foreground="#60A5FA" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                        <TextBox Classes="scanValue" x:Name="TxtScanCenterZ" Grid.Column="4" Watermark="Z" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
+                    </Grid>
 
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Center Z" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <TextBox x:Name="TxtScanCenterZ" Grid.Row="1" Grid.Column="1" Watermark="Center Z" TextChanged="ScanVolumeField_TextChanged"/>
-                    <Border Grid.Row="1" Grid.Column="2" Tag="CenterZ" Background="#3A3A3A" CornerRadius="3" Padding="6,2" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="⇆" Foreground="White"/></Border>
+                    <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
+                        <TextBlock Grid.Column="0" Text="Size" Foreground="LightGray" VerticalAlignment="Center"/>
+                        <Border Grid.Column="1" Tag="SizeX" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="X" Foreground="#F87171" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                        <TextBox Classes="scanValue" x:Name="TxtScanSizeX" Grid.Column="2" Watermark="X" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
+                        <Border Grid.Column="3" Tag="SizeZ" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Z" Foreground="#60A5FA" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                        <TextBox Classes="scanValue" x:Name="TxtScanSizeZ" Grid.Column="4" Watermark="Z" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
+                    </Grid>
 
-                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Size X" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <TextBox x:Name="TxtScanSizeX" Grid.Row="2" Grid.Column="1" Watermark="Size X" TextChanged="ScanVolumeField_TextChanged"/>
-                    <Border Grid.Row="2" Grid.Column="2" Tag="SizeX" Background="#3A3A3A" CornerRadius="3" Padding="6,2" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="⇆" Foreground="White"/></Border>
+                    <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
+                        <TextBlock Grid.Column="0" Text="Y" Foreground="LightGray" VerticalAlignment="Center"/>
+                        <Border Grid.Column="1" Tag="YTop" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Top" Foreground="#4ADE80" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                        <TextBox Classes="scanValue" x:Name="TxtScanYTop" Grid.Column="2" Watermark="Top" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
+                        <Border Grid.Column="3" Tag="YBottom" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Bot" Foreground="#4ADE80" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                        <TextBox Classes="scanValue" x:Name="TxtScanYBottom" Grid.Column="4" Watermark="Bot" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
+                    </Grid>
 
-                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Size Z" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <TextBox x:Name="TxtScanSizeZ" Grid.Row="3" Grid.Column="1" Watermark="Size Z" TextChanged="ScanVolumeField_TextChanged"/>
-                    <Border Grid.Row="3" Grid.Column="2" Tag="SizeZ" Background="#3A3A3A" CornerRadius="3" Padding="6,2" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="⇆" Foreground="White"/></Border>
+                    <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
+                        <TextBlock Grid.Column="0" Text="Angles" Foreground="LightGray" VerticalAlignment="Center"/>
+                        <Border Grid.Column="1" Tag="Yaw" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Yaw" Foreground="#FBBF24" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                        <TextBox Classes="scanValue" x:Name="TxtScanYaw" Grid.Column="2" Watermark="Deg" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
+                        <Border Grid.Column="3" Tag="RayTilt" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Tilt" Foreground="#F59E0B" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                        <TextBox Classes="scanValue" x:Name="TxtScanRayTilt" Grid.Column="4" Watermark="Deg" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
+                    </Grid>
 
-                    <TextBlock Grid.Row="4" Grid.Column="0" Text="Y Top" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <TextBox x:Name="TxtScanYTop" Grid.Row="4" Grid.Column="1" Watermark="Y Top" TextChanged="ScanVolumeField_TextChanged"/>
-                    <Border Grid.Row="4" Grid.Column="2" Tag="YTop" Background="#3A3A3A" CornerRadius="3" Padding="6,2" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="⇆" Foreground="White"/></Border>
-
-                    <TextBlock Grid.Row="5" Grid.Column="0" Text="Y Bottom" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <TextBox x:Name="TxtScanYBottom" Grid.Row="5" Grid.Column="1" Watermark="Y Bottom" TextChanged="ScanVolumeField_TextChanged"/>
-                    <Border Grid.Row="5" Grid.Column="2" Tag="YBottom" Background="#3A3A3A" CornerRadius="3" Padding="6,2" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="⇆" Foreground="White"/></Border>
-
-                    <TextBlock Grid.Row="6" Grid.Column="0" Text="Yaw" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <TextBox x:Name="TxtScanYaw" Grid.Row="6" Grid.Column="1" Watermark="Yaw Deg" TextChanged="ScanVolumeField_TextChanged"/>
-                    <Border Grid.Row="6" Grid.Column="2" Tag="Yaw" Background="#3A3A3A" CornerRadius="3" Padding="6,2" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="⇆" Foreground="White"/></Border>
-
-                    <TextBlock Grid.Row="7" Grid.Column="0" Text="Ray Tilt" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <TextBox x:Name="TxtScanRayTilt" Grid.Row="7" Grid.Column="1" Watermark="Ray Tilt Deg" TextChanged="ScanVolumeField_TextChanged"/>
-                    <Border Grid.Row="7" Grid.Column="2" Tag="RayTilt" Background="#3A3A3A" CornerRadius="3" Padding="6,2" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="⇆" Foreground="White"/></Border>
-
-                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Probe Cell" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <TextBox x:Name="TxtScanProbeCell" Grid.Row="8" Grid.Column="1" Watermark="Probe Cell Size" TextChanged="ScanVolumeField_TextChanged"/>
-                    <Border Grid.Row="8" Grid.Column="2" Tag="ProbeCell" Background="#3A3A3A" CornerRadius="3" Padding="6,2" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="⇆" Foreground="White"/></Border>
-                </Grid>
+                    <Grid ColumnDefinitions="54,44,*" ColumnSpacing="4">
+                        <TextBlock Grid.Column="0" Text="Probe" Foreground="LightGray" VerticalAlignment="Center"/>
+                        <Border Grid.Column="1" Tag="ProbeCell" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Cell" Foreground="#D1D5DB" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                        <TextBox Classes="scanValue" x:Name="TxtScanProbeCell" Grid.Column="2" Watermark="Meters" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
+                    </Grid>
+                </StackPanel>
                 <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="4">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="Broad Phase Density" Foreground="LightGray" VerticalAlignment="Center"/>
                     <Slider Grid.Row="0" Grid.Column="1" x:Name="SldScanDensity" Minimum="0" Maximum="1" Value="0.5" ValueChanged="SldScanDensity_ValueChanged" ToolTip.Tip="Higher = denser broad phase seeds (smaller probe cell)"/>
@@ -70,9 +103,9 @@
                     <Slider Grid.Row="1" Grid.Column="1" x:Name="SldFineDensity" Minimum="0" Maximum="1" Value="0.75" ValueChanged="SldFineDensity_ValueChanged" ToolTip.Tip="Higher = denser fine phase refinement (smaller target step)"/>
                     <TextBlock Grid.Row="1" Grid.Column="2" x:Name="TxtFineDensityMeters" Text="--- m" Foreground="#93C5FD" VerticalAlignment="Center" FontFamily="Consolas"/>
                 </Grid>
-                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="5">
-                    <Button x:Name="BtnResetScanVolume" Grid.Column="0" MinWidth="98" Content="Reset Volume" Click="BtnResetScanVolume_Click"/>
-                    <Button x:Name="BtnExportScanTs" Grid.Column="1" Content="Copy Script" Click="BtnExportScanTs_Click" ToolTip.Tip="Copy the portal raycast script based on the current view bounding volume"/>
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                    <Button x:Name="BtnResetScanVolume" Grid.Column="0" Content="Reset Volume" Click="BtnResetScanVolume_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+                    <Button x:Name="BtnExportScanTs" Grid.Column="1" Content="Copy Script" Click="BtnExportScanTs_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Copy the portal raycast script based on the current view bounding volume"/>
                 </Grid>
                 
                 <Separator Background="#444" Margin="0,4" Height="1"/>

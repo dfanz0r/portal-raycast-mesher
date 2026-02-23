@@ -36,6 +36,13 @@ public partial class MainWindow : Window
     private bool _isSyncingScanControls = false;
     private bool _scanBoundsEditingEnabled = true;
     private bool _monitorRenderOverridesActive = false;
+    private int _selectedPointCount = 0;
+    private readonly System.Collections.Generic.List<Vertex> _loadedPoints = new();
+    private readonly System.Collections.Generic.List<Ray> _loadedMisses = new();
+    private readonly System.Collections.Generic.List<Vertex> _selectionOriginalPoints = new();
+    private readonly System.Collections.Generic.List<Vertex> _selectionWorkingPoints = new();
+    private bool _selectionHasPendingChanges = false;
+    private float _loadedAvgDistance = 1.0f;
     private bool _preMonitorShowPoints;
     private bool _preMonitorShowSurfels;
     private bool _preMonitorShowMissRays;
@@ -54,6 +61,9 @@ public partial class MainWindow : Window
         Viewport.OnHoveredCoordinateChanged = OnHoveredCoordinateChanged;
         Viewport.OnMoveSpeedChanged = OnMoveSpeedChanged;
         Viewport.OnScanVolumeChanged = OnScanVolumeChanged;
+        Viewport.OnSelectionCountChanged = OnSelectionCountChanged;
+        Viewport.OnDeleteSelectionRequested = OnDeleteSelectionRequested;
+        Viewport.OnToggleSelectionModeRequested = OnToggleSelectionModeRequested;
         LstConsole.ItemsSource = _logLines;
         CmbDbPath.ItemsSource = _dbFiles;
 
@@ -62,6 +72,7 @@ public partial class MainWindow : Window
         LoadLocalDbFiles();
         SyncScanControls(Viewport.ScanVolume);
         UpdateMeshUiState();
+        ApplyInteractionMode();
     }
 
     private void UpdateMeshUiState()
@@ -108,6 +119,16 @@ public partial class MainWindow : Window
     private void OnScanVolumeChanged(ScanVolumeSettings settings)
     {
         Avalonia.Threading.Dispatcher.UIThread.Post(() => SyncScanControls(settings));
+    }
+
+    private void OnSelectionCountChanged(int count)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            _selectedPointCount = count;
+            TxtSelectedPoints.Text = $"Selected: {count}";
+            ApplyInteractionMode();
+        });
     }
 
     private void SyncScanControls(ScanVolumeSettings s)
@@ -592,6 +613,195 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ChkPointSelectMode_Changed(object? sender, RoutedEventArgs e)
+    {
+        if ((ChkPointSelectMode.IsChecked ?? false) && !_isDbLoaded)
+        {
+            Log("[SELECT] Load a DB before entering selection mode.");
+            ChkPointSelectMode.IsChecked = false;
+        }
+
+        if (ChkPointSelectMode.IsChecked == true)
+        {
+            BeginSelectionSessionFromLoadedData();
+        }
+
+        ApplyInteractionMode();
+    }
+
+    private void BtnClearSelectedPoints_Click(object? sender, RoutedEventArgs e)
+    {
+        Viewport.ClearPointSelection();
+        _selectedPointCount = 0;
+        TxtSelectedPoints.Text = "Selected: 0";
+        ApplyInteractionMode();
+    }
+
+    private void OnDeleteSelectionRequested()
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() => BtnDeleteSelectedPoints_Click(this, new RoutedEventArgs()));
+    }
+
+    private void OnToggleSelectionModeRequested()
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (_monitorTask != null)
+            {
+                return;
+            }
+
+            bool next = !(ChkPointSelectMode.IsChecked ?? false);
+            ChkPointSelectMode.IsChecked = next;
+            ChkPointSelectMode_Changed(this, new RoutedEventArgs());
+        });
+    }
+
+    private void BeginSelectionSessionFromLoadedData()
+    {
+        _selectionOriginalPoints.Clear();
+        _selectionOriginalPoints.AddRange(_loadedPoints);
+        _selectionWorkingPoints.Clear();
+        _selectionWorkingPoints.AddRange(_loadedPoints);
+        _selectionHasPendingChanges = false;
+    }
+
+    private static (long, long, long) QuantizedPointKey(double x, double y, double z)
+    {
+        return ((long)Math.Round(x * 10000.0), (long)Math.Round(y * 10000.0), (long)Math.Round(z * 10000.0));
+    }
+
+    private void BtnDeleteSelectedPoints_Click(object? sender, RoutedEventArgs e)
+    {
+        if (_monitorTask != null)
+        {
+            Log("[ERROR] Stop monitor before deleting selected points.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(_dbPath) || !File.Exists(_dbPath))
+        {
+            Log("[ERROR] Select a valid DB file first.");
+            return;
+        }
+
+        if (!(ChkPointSelectMode.IsChecked ?? false))
+        {
+            Log("[SELECT] Enable Point Selection Mode first.");
+            return;
+        }
+
+        var selectedIndices = Viewport.GetSelectedPointIndices();
+        if (selectedIndices.Length == 0)
+        {
+            Log("[SELECT] No points selected.");
+            return;
+        }
+
+        try
+        {
+            int removed = 0;
+            var selectedSet = new System.Collections.Generic.HashSet<int>(selectedIndices.Length);
+            for (int i = 0; i < selectedIndices.Length; i++)
+            {
+                selectedSet.Add(selectedIndices[i]);
+            }
+
+            var kept = new System.Collections.Generic.List<Vertex>(_selectionWorkingPoints.Count);
+            for (int i = 0; i < _selectionWorkingPoints.Count; i++)
+            {
+                if (selectedSet.Contains(i)) removed++;
+                else kept.Add(_selectionWorkingPoints[i]);
+            }
+
+            _selectionWorkingPoints.Clear();
+            _selectionWorkingPoints.AddRange(kept);
+            _selectionHasPendingChanges = true;
+
+            Viewport.ClearPointSelection();
+            _selectedPointCount = 0;
+            TxtSelectedPoints.Text = "Selected: 0";
+            _cachedMesh = null;
+            UpdateMeshUiState();
+            Viewport.LoadMesh(null);
+            Viewport.LoadData(_selectionWorkingPoints.ToArray(), _loadedMisses.ToArray(), _loadedAvgDistance, resetCamera: false);
+            Viewport.ClearPointSelection();
+            _isDbLoaded = true;
+            Log($"[SELECT] Removed {removed} points from working set (not saved yet).");
+        }
+        catch (Exception ex)
+        {
+            Log($"[ERROR] Failed deleting selected points: {ex.Message}");
+        }
+        finally
+        {
+            ApplyInteractionMode();
+        }
+    }
+
+    private async void BtnSelectionSave_Click(object? sender, RoutedEventArgs e)
+    {
+        if (!_selectionHasPendingChanges)
+        {
+            return;
+        }
+
+        try
+        {
+            BtnSelectionSave.IsEnabled = false;
+            await Task.Run(() => DatabaseIO.SaveDatabase(_selectionWorkingPoints, _loadedMisses, _dbPath));
+
+            _loadedPoints.Clear();
+            _loadedPoints.AddRange(_selectionWorkingPoints);
+            _selectionOriginalPoints.Clear();
+            _selectionOriginalPoints.AddRange(_selectionWorkingPoints);
+            _selectionHasPendingChanges = false;
+            Log($"[SELECT] Saved {_selectionWorkingPoints.Count} points to {_dbPath}");
+        }
+        catch (Exception ex)
+        {
+            Log($"[ERROR] Failed saving selection edits: {ex.Message}");
+        }
+        finally
+        {
+            ApplyInteractionMode();
+        }
+    }
+
+    private void BtnSelectionDiscard_Click(object? sender, RoutedEventArgs e)
+    {
+        if (!_selectionHasPendingChanges)
+        {
+            return;
+        }
+
+        _selectionWorkingPoints.Clear();
+        _selectionWorkingPoints.AddRange(_selectionOriginalPoints);
+        _selectionHasPendingChanges = false;
+        Viewport.ClearPointSelection();
+        _selectedPointCount = 0;
+        TxtSelectedPoints.Text = "Selected: 0";
+        Viewport.LoadData(_selectionWorkingPoints.ToArray(), _loadedMisses.ToArray(), _loadedAvgDistance, resetCamera: false);
+        _isDbLoaded = true;
+        Log("[SELECT] Discarded unsaved selection edits.");
+        ApplyInteractionMode();
+    }
+
+    private void ApplyInteractionMode()
+    {
+        bool monitorActive = _monitorTask != null;
+        bool selectionMode = !monitorActive && (ChkPointSelectMode.IsChecked ?? false);
+
+        Viewport.PointSelectionModeEnabled = selectionMode;
+        SetScanEditingEnabled(!monitorActive && !selectionMode);
+
+        ChkPointSelectMode.IsEnabled = !monitorActive;
+        BtnDeleteSelectedPoints.IsEnabled = selectionMode && _selectedPointCount > 0;
+        BtnClearSelectedPoints.IsEnabled = selectionMode && _selectedPointCount > 0;
+        BtnSelectionSave.IsEnabled = !monitorActive && _selectionHasPendingChanges;
+        BtnSelectionDiscard.IsEnabled = !monitorActive && _selectionHasPendingChanges;
+    }
+
     private async Task<bool> ConfirmClearDatabaseAsync()
     {
         var dialog = new Window
@@ -1002,8 +1212,16 @@ public partial class MainWindow : Window
 
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
+                _loadedPoints.Clear();
+                _loadedPoints.AddRange(masterPoints);
+                _loadedMisses.Clear();
+                _loadedMisses.AddRange(masterMisses);
+                _loadedAvgDistance = avgDistance;
+                BeginSelectionSessionFromLoadedData();
+
                 Viewport.LoadData(masterPoints.ToArray(), masterMisses.ToArray(), avgDistance);
                 _isDbLoaded = true;
+                ApplyInteractionMode();
             });
         });
     }
@@ -1115,7 +1333,7 @@ public partial class MainWindow : Window
             BtnClearDb.IsEnabled = true;
             BtnGenerateMesh.IsEnabled = true;
             UpdateMeshUiState();
-            SetScanEditingEnabled(true);
+            ApplyInteractionMode();
             ApplyMonitorRenderOverrides(false);
             return;
         }
@@ -1135,7 +1353,13 @@ public partial class MainWindow : Window
         BtnSaveMesh.IsEnabled = false;
         ChkShowMesh.IsChecked = false;
         ChkShowMesh.IsEnabled = false;
+        Viewport.PointSelectionModeEnabled = false;
         SetScanEditingEnabled(false);
+        ChkPointSelectMode.IsEnabled = false;
+        BtnDeleteSelectedPoints.IsEnabled = false;
+        BtnClearSelectedPoints.IsEnabled = false;
+        BtnSelectionSave.IsEnabled = false;
+        BtnSelectionDiscard.IsEnabled = false;
         ApplyMonitorRenderOverrides(true);
 
         if (!_isDbLoaded)
@@ -1154,7 +1378,7 @@ public partial class MainWindow : Window
                 BtnClearDb.IsEnabled = true;
                 BtnGenerateMesh.IsEnabled = true;
                 UpdateMeshUiState();
-                SetScanEditingEnabled(true);
+                ApplyInteractionMode();
                 ApplyMonitorRenderOverrides(false);
                 return;
             }
@@ -1192,7 +1416,7 @@ public partial class MainWindow : Window
                 BtnClearDb.IsEnabled = true;
                 BtnGenerateMesh.IsEnabled = true;
                 UpdateMeshUiState();
-                SetScanEditingEnabled(true);
+                ApplyInteractionMode();
                 ApplyMonitorRenderOverrides(false);
             });
 

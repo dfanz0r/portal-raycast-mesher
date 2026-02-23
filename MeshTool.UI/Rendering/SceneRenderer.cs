@@ -20,7 +20,7 @@ namespace MeshTool.UI.Rendering
         private OpenGlViewport _viewport;
         private uint _vaoPoints, _vboInstances;
         private uint _vaoSurfels, _vboSurfelVerts;
-        private uint _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRayAccum, _shaderProgramRayReveal, _shaderProgramGridAccum, _shaderProgramGridReveal, _shaderProgramComposite, _shaderProgramMesh, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints;
+        private uint _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRayAccum, _shaderProgramRayReveal, _shaderProgramGridAccum, _shaderProgramGridReveal, _shaderProgramComposite, _shaderProgramMesh, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints, _shaderProgramFlatColor;
         private uint _vaoRays, _vboRays;
         private uint _vaoMesh, _vboMesh;
         private uint _vaoGrid, _vboGrid;
@@ -32,6 +32,8 @@ namespace MeshTool.UI.Rendering
         private uint _vaoScanDensity, _vboScanDensity;
         private int _scanDensityVertexCount;
         private int _scanDensityBroadCount;
+        private uint _vaoSelectionFill, _vboSelectionFill;
+        private int _selectionFillVertexCount;
         private bool _scanDensityBufferValid;
         private ScanVolumeSettings _lastDensityScanVolume;
         private float _lastDensityFineTargetStep = -1f;
@@ -73,6 +75,13 @@ namespace MeshTool.UI.Rendering
         private ScanVolumeSettings _scanVolume = ScanVolumeSettings.Default;
         private int _hoverScanHandle;
         private int _activeScanHandle;
+        private bool _showSelectionBox;
+        private Vector3D<float> _selectionStartWorld;
+        private Vector3D<float> _selectionEndWorld;
+        private float _selectionYBottom;
+        private float _selectionYTop;
+        private Vector4D<float>[] _selectionAreas = Array.Empty<Vector4D<float>>();
+        private float _selectionAreasPlaneY;
 
         public SceneRenderer(GlInterface glInterface, OpenGlViewport viewport)
         {
@@ -139,9 +148,11 @@ namespace MeshTool.UI.Rendering
                 precision highp float;
                 layout (location = 0) in vec3 aPos;
                 layout (location = 1) in vec3 aNormal;
+                layout (location = 2) in float aSelected;
                 uniform mat4 uView;
                 uniform mat4 uProjection;
                 out vec3 Normal;
+                out float Selected;
                 void main() {
                     gl_Position = uProjection * uView * vec4(aPos, 1.0);
                     // Reverse Z: map z from [-1, 1] to [1, 0] for gl_FragDepth
@@ -155,16 +166,21 @@ namespace MeshTool.UI.Rendering
                     // This is exactly what we want for reverse Z!
                     gl_PointSize = 4.0;
                     Normal = aNormal;
+                    Selected = aSelected;
                 }";
             string fsPoint = @"#version 300 es
                 precision highp float;
                 in vec3 Normal;
+                in float Selected;
                 out vec4 FragColor;
                 void main() {
                     vec3 n = length(Normal) > 0.0001 ? normalize(Normal) : vec3(0.0, 1.0, 0.0);
                     vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
                     float lambert = max(dot(n, lightDir), 0.2);
                     vec3 base = mix(vec3(0.7, 0.8, 1.0), abs(n), 0.65);
+                    if (Selected > 0.5) {
+                        base = vec3(1.0, 0.62, 0.12);
+                    }
                     FragColor = vec4(base * lambert, 1.0);
                 }";
             _shaderProgramPoints = CreateProgram(vsPoint, fsPoint);
@@ -176,6 +192,7 @@ namespace MeshTool.UI.Rendering
                 layout (location = 1) in vec3 iPos;    // Instance Position
                 layout (location = 2) in vec3 iNormal; // Instance Normal
                 layout (location = 3) in float iSpawnTime; // Instance Spawn Time
+                layout (location = 4) in float iSelected; // Selection flag
                 
                 uniform mat4 uView;
                 uniform mat4 uProjection;
@@ -203,7 +220,9 @@ namespace MeshTool.UI.Rendering
                     Normal = norm;
                     
                     float age = uCurrentTime - iSpawnTime;
-                    if (uHasHovered > 0.5 && length(iPos - uHoveredPos) < 0.001) {
+                    if (iSelected > 0.5) {
+                        Color = vec3(1.0, 0.62, 0.12); // Selected
+                    } else if (uHasHovered > 0.5 && length(iPos - uHoveredPos) < 0.001) {
                         Color = vec3(1.0, 0.0, 1.0); // Magenta
                     } else if (iSpawnTime <= 0.0 || age > 5.0 || age < 0.0) {
                         Color = vec3(0.0, 0.7, 1.0); // Cyan
@@ -567,6 +586,23 @@ namespace MeshTool.UI.Rendering
 
             _shaderProgramGridAccum = CreateProgram(vsGrid, fsGridAccum);
             _shaderProgramGridReveal = CreateProgram(vsGrid, fsGridReveal);
+
+            string vsFlatColor = @"#version 300 es
+                precision highp float;
+                layout (location = 0) in vec3 aPos;
+                uniform mat4 uView;
+                uniform mat4 uProjection;
+                void main() {
+                    gl_Position = uProjection * uView * vec4(aPos, 1.0);
+                }";
+            string fsFlatColor = @"#version 300 es
+                precision highp float;
+                uniform vec4 uColor;
+                out vec4 FragColor;
+                void main() {
+                    FragColor = uColor;
+                }";
+            _shaderProgramFlatColor = CreateProgram(vsFlatColor, fsFlatColor);
         }
 
         private unsafe uint CreateProgram(string vsSource, string fsSource)
@@ -616,10 +652,12 @@ namespace MeshTool.UI.Rendering
             _vaoPoints = _gl.GenVertexArray();
             _gl.BindVertexArray(_vaoPoints);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)0);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)0);
             _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(3 * sizeof(float)));
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(3 * sizeof(float)));
             _gl.EnableVertexAttribArray(1);
+            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(7 * sizeof(float)));
+            _gl.EnableVertexAttribArray(2);
 
             // 2. Surfels VAO
             _vaoSurfels = _gl.GenVertexArray();
@@ -653,17 +691,21 @@ namespace MeshTool.UI.Rendering
             _gl.EnableVertexAttribArray(0);
 
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)0);
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)0);
             _gl.EnableVertexAttribArray(1);
             _gl.VertexAttribDivisor(1, 1); // Instanced
 
-            _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(3 * sizeof(float)));
+            _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(3 * sizeof(float)));
             _gl.EnableVertexAttribArray(2);
             _gl.VertexAttribDivisor(2, 1); // Instanced
 
-            _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(6 * sizeof(float)));
+            _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(6 * sizeof(float)));
             _gl.EnableVertexAttribArray(3);
             _gl.VertexAttribDivisor(3, 1); // Instanced
+
+            _gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(7 * sizeof(float)));
+            _gl.EnableVertexAttribArray(4);
+            _gl.VertexAttribDivisor(4, 1); // Instanced
 
             // 3. Rays VAO
             _vaoRays = _gl.GenVertexArray();
@@ -767,6 +809,15 @@ namespace MeshTool.UI.Rendering
             _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
             _gl.EnableVertexAttribArray(1);
 
+            // 10. Selection fill VAO (dynamic planar quad triangles)
+            _vaoSelectionFill = _gl.GenVertexArray();
+            _vboSelectionFill = _gl.GenBuffer();
+            _gl.BindVertexArray(_vaoSelectionFill);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboSelectionFill);
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(6 * 3 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+            _gl.EnableVertexAttribArray(0);
+
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
             _gl.BindVertexArray(0);
         }
@@ -798,6 +849,7 @@ namespace MeshTool.UI.Rendering
             _gl.DeleteVertexArray(_vaoScanVolume);
             _gl.DeleteVertexArray(_vaoScanHandles);
             _gl.DeleteVertexArray(_vaoScanDensity);
+            _gl.DeleteVertexArray(_vaoSelectionFill);
             _gl.DeleteBuffer(_vboInstances);
             _gl.DeleteBuffer(_vboSurfelVerts);
             _gl.DeleteBuffer(_vboRays);
@@ -807,6 +859,7 @@ namespace MeshTool.UI.Rendering
             _gl.DeleteBuffer(_vboScanVolume);
             _gl.DeleteBuffer(_vboScanHandles);
             _gl.DeleteBuffer(_vboScanDensity);
+            _gl.DeleteBuffer(_vboSelectionFill);
             _gl.DeleteProgram(_shaderProgramPoints);
             _gl.DeleteProgram(_shaderProgramSurfels);
             _gl.DeleteProgram(_shaderProgramRayAccum);
@@ -818,6 +871,7 @@ namespace MeshTool.UI.Rendering
             _gl.DeleteProgram(_shaderProgramAxes);
             _gl.DeleteProgram(_shaderProgramGizmoSolid);
             _gl.DeleteProgram(_shaderProgramDensityPoints);
+            _gl.DeleteProgram(_shaderProgramFlatColor);
             _gl.Dispose();
         }
 
@@ -838,6 +892,10 @@ namespace MeshTool.UI.Rendering
         private int _pointCount;
         private int _rayCount;
         private int _missRayCount;
+        private readonly System.Collections.Generic.List<Vertex> _allPoints = new System.Collections.Generic.List<Vertex>();
+        private readonly System.Collections.Generic.HashSet<int> _selectedPointIndices = new System.Collections.Generic.HashSet<int>();
+        private int[]? _pendingSelectedPointIndices;
+        private bool _selectionDirty;
 
         public bool IsMeshUpdatePending
         {
@@ -916,6 +974,30 @@ namespace MeshTool.UI.Rendering
             _activeScanHandle = activeHandle;
         }
 
+        public void UpdateSelectedPointIndices(int[] indices)
+        {
+            lock (_pendingLock)
+            {
+                _pendingSelectedPointIndices = indices;
+                _selectionDirty = true;
+            }
+        }
+
+        public void UpdateSelectionBox(bool show, Vector3D<float> startWorld, Vector3D<float> endWorld, float yBottom, float yTop)
+        {
+            _showSelectionBox = show;
+            _selectionStartWorld = startWorld;
+            _selectionEndWorld = endWorld;
+            _selectionYBottom = MathF.Min(yBottom, yTop);
+            _selectionYTop = MathF.Max(yBottom, yTop);
+        }
+
+        public void UpdateSelectionAreas(Vector4D<float>[] areas, float planeY)
+        {
+            _selectionAreas = areas ?? Array.Empty<Vector4D<float>>();
+            _selectionAreasPlaneY = planeY;
+        }
+
         private void UpdateLatestSpawnTime(Vertex[]? points, MeshTool.Core.Data.Ray[]? rays)
         {
             if (points != null)
@@ -987,6 +1069,8 @@ namespace MeshTool.UI.Rendering
             bool doFullUpdate = false;
             bool doAppend = false;
             bool doMesh = false;
+            bool doSelectionUpdate = false;
+            int[]? selectedIndices = null;
 
             lock (_pendingLock)
             {
@@ -1007,6 +1091,13 @@ namespace MeshTool.UI.Rendering
                     _pendingAppendRaysList.Clear();
                     pendingAvgDistance = _pendingAvgDistance;
                     doAppend = true;
+                }
+
+                if (_selectionDirty)
+                {
+                    _selectionDirty = false;
+                    selectedIndices = _pendingSelectedPointIndices ?? Array.Empty<int>();
+                    doSelectionUpdate = true;
                 }
 
                 if (_meshDirty)
@@ -1047,13 +1138,13 @@ namespace MeshTool.UI.Rendering
                 {
                     _pointCapacity = Math.Max(_pointCapacity * 2, _pointCount + 10000);
                     _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                    _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_pointCapacity * 7 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
+                    _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_pointCapacity * 8 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
                 }
 
                 if (_pointCount > 0)
                 {
                     Console.WriteLine($"[GL] Uploading {_pointCount} points to GPU...");
-                    int pointFloatCount = _pointCount * 7;
+                    int pointFloatCount = _pointCount * 8;
                     float[] vertices = ArrayPool<float>.Shared.Rent(pointFloatCount);
                     try
                     {
@@ -1076,13 +1167,14 @@ namespace MeshTool.UI.Rendering
                                 nz = 0f;
                             }
 
-                            vertices[i * 7 + 0] = (float)points[i].Position.X;
-                            vertices[i * 7 + 1] = (float)points[i].Position.Y;
-                            vertices[i * 7 + 2] = (float)points[i].Position.Z;
-                            vertices[i * 7 + 3] = nx;
-                            vertices[i * 7 + 4] = ny;
-                            vertices[i * 7 + 5] = nz;
-                            vertices[i * 7 + 6] = points[i].SpawnTime;
+                            vertices[i * 8 + 0] = (float)points[i].Position.X;
+                            vertices[i * 8 + 1] = (float)points[i].Position.Y;
+                            vertices[i * 8 + 2] = (float)points[i].Position.Z;
+                            vertices[i * 8 + 3] = nx;
+                            vertices[i * 8 + 4] = ny;
+                            vertices[i * 8 + 5] = nz;
+                            vertices[i * 8 + 6] = points[i].SpawnTime;
+                            vertices[i * 8 + 7] = _selectedPointIndices.Contains(i) ? 1f : 0f;
                         }
 
                         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
@@ -1170,6 +1262,9 @@ namespace MeshTool.UI.Rendering
                         ArrayPool<float>.Shared.Return(rayData);
                     }
                 }
+
+                _allPoints.Clear();
+                _allPoints.AddRange(points);
             }
             else if (doAppend)
             {
@@ -1191,11 +1286,11 @@ namespace MeshTool.UI.Rendering
                         int newCapacity = Math.Max(_pointCapacity * 2, newPointCount + 10000);
                         uint newVbo = _gl.GenBuffer();
                         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, newVbo);
-                        _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(newCapacity * 7 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
+                        _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(newCapacity * 8 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
 
                         _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, _vboInstances);
                         _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, newVbo);
-                        _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, 0, 0, (nuint)(_pointCount * 7 * sizeof(float)));
+                        _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, 0, 0, (nuint)(_pointCount * 8 * sizeof(float)));
 
                         _gl.DeleteBuffer(_vboInstances);
                         _vboInstances = newVbo;
@@ -1204,17 +1299,19 @@ namespace MeshTool.UI.Rendering
                         // Re-bind VAOs to new VBO
                         _gl.BindVertexArray(_vaoPoints);
                         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)0);
-                        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(3 * sizeof(float)));
+                        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)0);
+                        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+                        _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(7 * sizeof(float)));
 
                         _gl.BindVertexArray(_vaoSurfels);
                         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)0);
-                        _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(3 * sizeof(float)));
-                        _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(6 * sizeof(float)));
+                        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)0);
+                        _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+                        _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+                        _gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(7 * sizeof(float)));
                     }
 
-                    int pointFloatCount = addedPoints * 7;
+                    int pointFloatCount = addedPoints * 8;
                     float[] vertices = ArrayPool<float>.Shared.Rent(pointFloatCount);
                     try
                     {
@@ -1237,19 +1334,21 @@ namespace MeshTool.UI.Rendering
                             nz = 0f;
                         }
 
-                        vertices[i * 7 + 0] = (float)newPoints[i].Position.X;
-                        vertices[i * 7 + 1] = (float)newPoints[i].Position.Y;
-                        vertices[i * 7 + 2] = (float)newPoints[i].Position.Z;
-                        vertices[i * 7 + 3] = nx;
-                        vertices[i * 7 + 4] = ny;
-                        vertices[i * 7 + 5] = nz;
-                            vertices[i * 7 + 6] = newPoints[i].SpawnTime;
+                            int pointIndex = _pointCount + i;
+                            vertices[i * 8 + 0] = (float)newPoints[i].Position.X;
+                            vertices[i * 8 + 1] = (float)newPoints[i].Position.Y;
+                            vertices[i * 8 + 2] = (float)newPoints[i].Position.Z;
+                            vertices[i * 8 + 3] = nx;
+                            vertices[i * 8 + 4] = ny;
+                            vertices[i * 8 + 5] = nz;
+                            vertices[i * 8 + 6] = newPoints[i].SpawnTime;
+                            vertices[i * 8 + 7] = _selectedPointIndices.Contains(pointIndex) ? 1f : 0f;
                         }
 
                         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
                         fixed (float* v = vertices)
                         {
-                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(_pointCount * 7 * sizeof(float)), (nuint)(pointFloatCount * sizeof(float)), v);
+                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(_pointCount * 8 * sizeof(float)), (nuint)(pointFloatCount * sizeof(float)), v);
                         }
                     }
                     finally
@@ -1257,6 +1356,7 @@ namespace MeshTool.UI.Rendering
                         ArrayPool<float>.Shared.Return(vertices);
                     }
                     _pointCount = newPointCount;
+                    _allPoints.AddRange(newPoints);
                 }
 
                 if (addedRays > 0)
@@ -1396,6 +1496,71 @@ namespace MeshTool.UI.Rendering
 
                     _rayCount = newRayCount;
                     _missRayCount = oldMissRayCount + addedMisses;
+                }
+
+            }
+
+            if (doSelectionUpdate)
+            {
+                _selectedPointIndices.Clear();
+                if (selectedIndices != null)
+                {
+                    for (int i = 0; i < selectedIndices.Length; i++)
+                    {
+                        int idx = selectedIndices[i];
+                        if (idx >= 0 && idx < _pointCount)
+                        {
+                            _selectedPointIndices.Add(idx);
+                        }
+                    }
+                }
+
+                if (_pointCount > 0)
+                {
+                    int pointFloatCount = _pointCount * 8;
+                    float[] vertices = ArrayPool<float>.Shared.Rent(pointFloatCount);
+                    try
+                    {
+                        for (int i = 0; i < _pointCount; i++)
+                        {
+                            var p = _allPoints[i];
+                            float nx = (float)p.Normal.X;
+                            float ny = (float)p.Normal.Y;
+                            float nz = (float)p.Normal.Z;
+                            float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
+                            if (nLen > 0.00001f)
+                            {
+                                nx /= nLen;
+                                ny /= nLen;
+                                nz /= nLen;
+                            }
+                            else
+                            {
+                                nx = 0f;
+                                ny = 1f;
+                                nz = 0f;
+                            }
+
+                            vertices[i * 8 + 0] = (float)p.Position.X;
+                            vertices[i * 8 + 1] = (float)p.Position.Y;
+                            vertices[i * 8 + 2] = (float)p.Position.Z;
+                            vertices[i * 8 + 3] = nx;
+                            vertices[i * 8 + 4] = ny;
+                            vertices[i * 8 + 5] = nz;
+                            vertices[i * 8 + 6] = p.SpawnTime;
+                            vertices[i * 8 + 7] = _selectedPointIndices.Contains(i) ? 1f : 0f;
+                        }
+
+                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
+                        fixed (float* v = vertices)
+                        {
+                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(pointFloatCount * sizeof(float)), v);
+                        }
+                    }
+                    finally
+                    {
+                        ArrayPool<float>.Shared.Return(vertices);
+                    }
                 }
             }
 
@@ -1605,7 +1770,7 @@ namespace MeshTool.UI.Rendering
             _gl.Enable(EnableCap.DepthTest);
             _gl.DepthFunc(DepthFunction.Greater);
 
-            bool hasAnyGeometry = _pointCount > 0 || _rayCount > 0 || _meshVertexCount > 0;
+            bool hasAnyGeometry = _pointCount > 0 || _rayCount > 0 || _meshVertexCount > 0 || _showSelectionBox || _selectionAreas.Length > 0;
             if (!hasAnyGeometry && !_viewport.ShowGrid)
             {
                 _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaFbo);
@@ -1683,7 +1848,7 @@ namespace MeshTool.UI.Rendering
                 _gl.DrawArrays(PrimitiveType.Lines, 0, 6);
             }
 
-            if (ShowScanVolume || ShowScanDensityPreview)
+            if (ShowScanVolume || ShowScanDensityPreview || _showSelectionBox || _selectionAreas.Length > 0)
             {
                 if (ShowScanVolume)
                 {
@@ -1697,7 +1862,11 @@ namespace MeshTool.UI.Rendering
                 {
                     UpdateScanDensityBuffer();
                 }
-                if (_scanDensityVertexCount > 0 || (ShowScanVolume && _scanVolumeVertexCount > 0))
+                if (_showSelectionBox || _selectionAreas.Length > 0 || _selectionFillVertexCount > 0)
+                {
+                    UpdateSelectionFillBuffer();
+                }
+                if (_scanDensityVertexCount > 0 || (ShowScanVolume && _scanVolumeVertexCount > 0) || _selectionFillVertexCount > 0)
                 {
                     if (ShowScanDensityPreview && _scanDensityVertexCount > 0)
                     {
@@ -1737,6 +1906,21 @@ namespace MeshTool.UI.Rendering
 
                     _gl.Enable(EnableCap.DepthTest);
                     _gl.DepthFunc(DepthFunction.Greater);
+
+                    if (_selectionFillVertexCount > 0)
+                    {
+                        _gl.DepthMask(false);
+                        _gl.Enable(EnableCap.Blend);
+                        _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+                        _gl.UseProgram(_shaderProgramFlatColor);
+                        SetUniforms(_shaderProgramFlatColor, view, proj);
+                        int colorLoc = _gl.GetUniformLocation(_shaderProgramFlatColor, "uColor");
+                        _gl.Uniform4(colorLoc, 0.88f, 0.42f, 1.0f, 0.16f);
+                        _gl.BindVertexArray(_vaoSelectionFill);
+                        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_selectionFillVertexCount);
+                        _gl.Disable(EnableCap.Blend);
+                        _gl.DepthMask(true);
+                    }
 
                     if (ShowScanVolume && ShowScanHandles && _scanHandleVertexCount > 0)
                     {
@@ -1901,10 +2085,74 @@ namespace MeshTool.UI.Rendering
         private unsafe void UpdateScanVolumeBuffer()
         {
             var s = _scanVolume.Sanitize();
-            float[] data = BuildScanVolumeLineVertices(s, _hoverScanHandle, _activeScanHandle, ShowScanHandles);
+            float[] data = BuildScanVolumeLineVertices(
+                s,
+                _hoverScanHandle,
+                _activeScanHandle,
+                ShowScanHandles,
+                _showSelectionBox,
+                _selectionStartWorld,
+                _selectionEndWorld,
+                _selectionYBottom,
+                _selectionYTop);
             _scanVolumeVertexCount = data.Length / 6;
 
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboScanVolume);
+            fixed (float* v = data)
+            {
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), v, BufferUsageARB.DynamicDraw);
+            }
+        }
+
+        private unsafe void UpdateSelectionFillBuffer()
+        {
+            _selectionFillVertexCount = 0;
+            if (!_showSelectionBox && _selectionAreas.Length == 0)
+            {
+                return;
+            }
+
+            var verts = new System.Collections.Generic.List<float>((_selectionAreas.Length + (_showSelectionBox ? 1 : 0)) * 18);
+            float y = _selectionAreasPlaneY + 0.05f;
+
+            void AddArea(float minX, float maxX, float minZ, float maxZ)
+            {
+                if ((maxX - minX) < 0.001f || (maxZ - minZ) < 0.001f)
+                {
+                    return;
+                }
+
+                verts.Add(minX); verts.Add(y); verts.Add(minZ);
+                verts.Add(maxX); verts.Add(y); verts.Add(minZ);
+                verts.Add(maxX); verts.Add(y); verts.Add(maxZ);
+                verts.Add(minX); verts.Add(y); verts.Add(minZ);
+                verts.Add(maxX); verts.Add(y); verts.Add(maxZ);
+                verts.Add(minX); verts.Add(y); verts.Add(maxZ);
+            }
+
+            for (int i = 0; i < _selectionAreas.Length; i++)
+            {
+                var a = _selectionAreas[i];
+                AddArea(a.X, a.Y, a.Z, a.W);
+            }
+
+            if (_showSelectionBox)
+            {
+                float minX = MathF.Min(_selectionStartWorld.X, _selectionEndWorld.X);
+                float maxX = MathF.Max(_selectionStartWorld.X, _selectionEndWorld.X);
+                float minZ = MathF.Min(_selectionStartWorld.Z, _selectionEndWorld.Z);
+                float maxZ = MathF.Max(_selectionStartWorld.Z, _selectionEndWorld.Z);
+                AddArea(minX, maxX, minZ, maxZ);
+            }
+
+            if (verts.Count == 0)
+            {
+                return;
+            }
+
+            _selectionFillVertexCount = verts.Count / 3;
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboSelectionFill);
+            var data = verts.ToArray();
             fixed (float* v = data)
             {
                 _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), v, BufferUsageARB.DynamicDraw);
@@ -2262,7 +2510,16 @@ namespace MeshTool.UI.Rendering
             return verts.ToArray();
         }
 
-        private static float[] BuildScanVolumeLineVertices(ScanVolumeSettings s, int hoverHandle, int activeHandle, bool showHelpers)
+        private static float[] BuildScanVolumeLineVertices(
+            ScanVolumeSettings s,
+            int hoverHandle,
+            int activeHandle,
+            bool showHelpers,
+            bool showSelectionBox,
+            Vector3D<float> selectionStartWorld,
+            Vector3D<float> selectionEndWorld,
+            float selectionYBottom,
+            float selectionYTop)
         {
             float hx = s.SizeX * 0.5f;
             float hz = s.SizeZ * 0.5f;
@@ -2376,6 +2633,42 @@ namespace MeshTool.UI.Rendering
                     var p0 = centerMid + xAxis * (MathF.Cos(a0) * ringRadius * ringScale) + zAxis * (MathF.Sin(a0) * ringRadius * ringScale);
                     var p1 = centerMid + xAxis * (MathF.Cos(a1) * ringRadius * ringScale) + zAxis * (MathF.Sin(a1) * ringRadius * ringScale);
                     AddLine(p0, p1, ringR, ringG, ringB);
+                }
+            }
+
+            if (showSelectionBox)
+            {
+                float minX = MathF.Min(selectionStartWorld.X, selectionEndWorld.X);
+                float maxX = MathF.Max(selectionStartWorld.X, selectionEndWorld.X);
+                float minZ = MathF.Min(selectionStartWorld.Z, selectionEndWorld.Z);
+                float maxZ = MathF.Max(selectionStartWorld.Z, selectionEndWorld.Z);
+                float y0 = MathF.Min(selectionYBottom, selectionYTop);
+                float y1 = MathF.Max(selectionYBottom, selectionYTop);
+
+                if ((maxX - minX) < 0.5f) { minX -= 1f; maxX += 1f; }
+                if ((maxZ - minZ) < 0.5f) { minZ -= 1f; maxZ += 1f; }
+
+                var b0 = new Vector3D<float>(minX, y0, minZ);
+                var b1 = new Vector3D<float>(maxX, y0, minZ);
+                var b2 = new Vector3D<float>(maxX, y0, maxZ);
+                var b3 = new Vector3D<float>(minX, y0, maxZ);
+                var t0 = new Vector3D<float>(minX, y1, minZ);
+                var t1 = new Vector3D<float>(maxX, y1, minZ);
+                var t2 = new Vector3D<float>(maxX, y1, maxZ);
+                var t3 = new Vector3D<float>(minX, y1, maxZ);
+
+                const float sr = 1.0f;
+                const float sg = 0.42f;
+                const float sb = 0.95f;
+                if (MathF.Abs(y1 - y0) < 0.001f)
+                {
+                    AddLine(b0, b1, sr, sg, sb); AddLine(b1, b2, sr, sg, sb); AddLine(b2, b3, sr, sg, sb); AddLine(b3, b0, sr, sg, sb);
+                }
+                else
+                {
+                    AddLine(b0, b1, sr, sg, sb); AddLine(b1, b2, sr, sg, sb); AddLine(b2, b3, sr, sg, sb); AddLine(b3, b0, sr, sg, sb);
+                    AddLine(t0, t1, sr, sg, sb); AddLine(t1, t2, sr, sg, sb); AddLine(t2, t3, sr, sg, sb); AddLine(t3, t0, sr, sg, sb);
+                    AddLine(b0, t0, sr, sg, sb); AddLine(b1, t1, sr, sg, sb); AddLine(b2, t2, sr, sg, sb); AddLine(b3, t3, sr, sg, sb);
                 }
             }
 

@@ -52,12 +52,17 @@ namespace MeshTool.UI.Controls
         public bool ScanVolumeEditEnabled { get; set; } = true;
         public bool ShowScanDensityPreview { get; set; } = true;
         public float ScanFineTargetStep { get; set; } = 24f;
+        public bool PointSelectionModeEnabled { get; set; } = false;
         public ScanVolumeSettings ScanVolume { get; private set; } = ScanVolumeSettings.Default;
         public int HoverScanHandleId => (int)_hoverScanHandle;
         public int ActiveScanHandleId => (int)_activeScanHandle;
+        public int SelectedPointCount => _selectedPointIndices.Count;
         public Action<string>? OnLog { get; set; }
         public Action<Vector3D<float>?>? OnHoveredCoordinateChanged { get; set; }
         public Action<ScanVolumeSettings>? OnScanVolumeChanged { get; set; }
+        public Action<int>? OnSelectionCountChanged { get; set; }
+        public Action? OnDeleteSelectionRequested { get; set; }
+        public Action? OnToggleSelectionModeRequested { get; set; }
 
         public Action<float>? OnMoveSpeedChanged { get; set; }
 
@@ -128,6 +133,159 @@ namespace MeshTool.UI.Controls
 
         private bool _hoverDirty = true;
         private bool _initialScanCameraFramed = false;
+        private readonly HashSet<int> _selectedPointIndices = new HashSet<int>();
+        private readonly List<Vector4D<float>> _selectionAreas = new List<Vector4D<float>>();
+        private bool _isPointSelecting = false;
+        private bool _selectionWorldValid = false;
+        private Vector3D<float> _selectionStartWorld;
+        private Vector3D<float> _selectionEndWorld;
+        private Vector3D<float> _selectionEndWorldTarget;
+        private bool _selectionHasTarget = false;
+
+        public void ClearPointSelection()
+        {
+            _isPointSelecting = false;
+            _selectionWorldValid = false;
+            _selectionHasTarget = false;
+            _selectedPointIndices.Clear();
+            _selectionAreas.Clear();
+            _renderer?.UpdateSelectionAreas(Array.Empty<Vector4D<float>>(), _gridPlaneY);
+            _renderer?.UpdateSelectedPointIndices(Array.Empty<int>());
+            OnSelectionCountChanged?.Invoke(0);
+            Invalidate();
+        }
+
+        public (double X, double Y, double Z)[] GetSelectedPointPositions()
+        {
+            if (_selectedPointIndices.Count == 0) return Array.Empty<(double X, double Y, double Z)>();
+
+            var list = new List<(double X, double Y, double Z)>(_selectedPointIndices.Count);
+            foreach (int idx in _selectedPointIndices)
+            {
+                if (idx >= 0 && idx < _points.Count)
+                {
+                    var p = _points[idx].Position;
+                    list.Add((p.X, p.Y, p.Z));
+                }
+            }
+            return list.ToArray();
+        }
+
+        public int[] GetSelectedPointIndices()
+        {
+            if (_selectedPointIndices.Count == 0) return Array.Empty<int>();
+            var arr = new int[_selectedPointIndices.Count];
+            _selectedPointIndices.CopyTo(arr);
+            Array.Sort(arr);
+            return arr;
+        }
+
+        public override void Render(DrawingContext context)
+        {
+            base.Render(context);
+        }
+
+        private void ApplyPointSelectionWorld(bool append)
+        {
+            if (!append)
+            {
+                _selectedPointIndices.Clear();
+            }
+
+            if (!_selectionWorldValid)
+            {
+                _renderer?.UpdateSelectedPointIndices(_selectedPointIndices.Count == 0 ? Array.Empty<int>() : new List<int>(_selectedPointIndices).ToArray());
+                OnSelectionCountChanged?.Invoke(_selectedPointIndices.Count);
+                Invalidate();
+                return;
+            }
+
+            float minX = MathF.Min(_selectionStartWorld.X, _selectionEndWorld.X);
+            float maxX = MathF.Max(_selectionStartWorld.X, _selectionEndWorld.X);
+            float minZ = MathF.Min(_selectionStartWorld.Z, _selectionEndWorld.Z);
+            float maxZ = MathF.Max(_selectionStartWorld.Z, _selectionEndWorld.Z);
+
+            float spanX = maxX - minX;
+            float spanZ = maxZ - minZ;
+            bool clickPick = spanX < 0.02f && spanZ < 0.02f;
+
+            if (clickPick)
+            {
+                float pickRadius = ComputeSelectionPickRadius(_lastMousePos);
+                float pickRadiusSq = pickRadius * pickRadius;
+                int nearestIdx = -1;
+                float nearestDistSq = float.MaxValue;
+
+                for (int i = 0; i < _points.Count; i++)
+                {
+                    var p = _points[i].Position;
+                    float dx = (float)p.X - _selectionEndWorld.X;
+                    float dz = (float)p.Z - _selectionEndWorld.Z;
+                    float d2 = dx * dx + dz * dz;
+                    if (d2 <= pickRadiusSq && d2 < nearestDistSq)
+                    {
+                        nearestDistSq = d2;
+                        nearestIdx = i;
+                    }
+                }
+
+                if (nearestIdx >= 0)
+                {
+                    _selectedPointIndices.Add(nearestIdx);
+                }
+
+                _renderer?.UpdateSelectedPointIndices(_selectedPointIndices.Count == 0 ? Array.Empty<int>() : new List<int>(_selectedPointIndices).ToArray());
+                OnSelectionCountChanged?.Invoke(_selectedPointIndices.Count);
+                Invalidate();
+                return;
+            }
+
+            for (int i = 0; i < _points.Count; i++)
+            {
+                var p = _points[i].Position;
+                float px = (float)p.X;
+                float pz = (float)p.Z;
+
+                if (px < minX || px > maxX || pz < minZ || pz > maxZ) continue;
+                _selectedPointIndices.Add(i);
+            }
+
+            _renderer?.UpdateSelectedPointIndices(_selectedPointIndices.Count == 0 ? Array.Empty<int>() : new List<int>(_selectedPointIndices).ToArray());
+            OnSelectionCountChanged?.Invoke(_selectedPointIndices.Count);
+            Invalidate();
+        }
+
+        private float ComputeSelectionPickRadius(Point screenPos)
+        {
+            if (!TryProjectPointerToPlane(_gridPlaneY, screenPos, out var p0))
+            {
+                return 0.5f;
+            }
+
+            var pX = screenPos + new Point(1, 0);
+            var pY = screenPos + new Point(0, 1);
+
+            float metersPerPixel = 0.0f;
+            if (TryProjectPointerToPlane(_gridPlaneY, pX, out var px))
+            {
+                float dx = px.X - p0.X;
+                float dz = px.Z - p0.Z;
+                metersPerPixel = MathF.Max(metersPerPixel, MathF.Sqrt(dx * dx + dz * dz));
+            }
+            if (TryProjectPointerToPlane(_gridPlaneY, pY, out var py))
+            {
+                float dx = py.X - p0.X;
+                float dz = py.Z - p0.Z;
+                metersPerPixel = MathF.Max(metersPerPixel, MathF.Sqrt(dx * dx + dz * dz));
+            }
+
+            if (metersPerPixel <= 0.0f)
+            {
+                return 0.5f;
+            }
+
+            return Math.Clamp(metersPerPixel * 6.0f, 0.15f, 6.0f);
+        }
 
         private void FrameCameraToScanVolume()
         {
@@ -154,6 +312,12 @@ namespace MeshTool.UI.Controls
             }
 
             bool cameraMoved = UpdateCameraMovement(dt);
+
+            if (_isPointSelecting && _selectionWorldValid && _selectionHasTarget)
+            {
+                _selectionEndWorld = _selectionEndWorldTarget;
+            }
+
             if (_renderer != null)
             {
                 _renderer.ShowScanVolume = ShowScanVolume;
@@ -162,6 +326,13 @@ namespace MeshTool.UI.Controls
                 _renderer.ScanFineTargetStep = ScanFineTargetStep;
                 _renderer.UpdateScanVolume(ScanVolume);
                 _renderer.UpdateScanHandleState(HoverScanHandleId, ActiveScanHandleId);
+                _renderer.UpdateSelectionBox(
+                    _isPointSelecting && _selectionWorldValid,
+                    _selectionStartWorld,
+                    _selectionEndWorld,
+                    _gridPlaneY,
+                    _gridPlaneY);
+                _renderer.UpdateSelectionAreas(_selectionAreas.ToArray(), _gridPlaneY);
             }
             _renderer?.Render(fb, Bounds.Size);
 
@@ -173,7 +344,7 @@ namespace MeshTool.UI.Controls
 
             bool hasAnimations = _renderer != null && _renderer.HasActiveAnimations();
 
-            if (cameraMoved || hasAnimations || _pressedKeys.Count > 0)
+            if (cameraMoved || hasAnimations || _pressedKeys.Count > 0 || (_isPointSelecting && _selectionHasTarget))
             {
                 RequestNextFrameRendering();
             }
@@ -333,6 +504,11 @@ namespace MeshTool.UI.Controls
         {
             _points.Clear();
             _points.AddRange(points);
+            _selectedPointIndices.Clear();
+            _selectionAreas.Clear();
+            _renderer?.UpdateSelectionAreas(Array.Empty<Vector4D<float>>(), _gridPlaneY);
+            _renderer?.UpdateSelectedPointIndices(Array.Empty<int>());
+            OnSelectionCountChanged?.Invoke(0);
             RebuildHoverGrid(points, avgDistance);
             _renderer?.UpdateData(points, rays, avgDistance);
 
@@ -512,14 +688,82 @@ namespace MeshTool.UI.Controls
                 return false;
             }
 
-            float t = (planeY - ray.Origin.Y) / ray.Direction.Y;
+            float t = (planeY - Camera.Position.Y) / ray.Direction.Y;
             if (t <= 0)
             {
                 return false;
             }
 
-            point = ray.Origin + ray.Direction * t;
+            point = Camera.Position + ray.Direction * t;
             return true;
+        }
+
+        private Point ClampPointerToViewport(Point p)
+        {
+            return new Point(
+                Math.Clamp(p.X, 0.0, Math.Max(0.0, Bounds.Width - 1.0)),
+                Math.Clamp(p.Y, 0.0, Math.Max(0.0, Bounds.Height - 1.0)));
+        }
+
+        private void BeginPointSelection(Point local)
+        {
+            var p = ClampPointerToViewport(local);
+            _lastMousePos = p;
+            _isPointSelecting = true;
+            _selectionWorldValid = TryProjectPointerToPlane(_gridPlaneY, p, out _selectionStartWorld);
+            _selectionEndWorld = _selectionStartWorld;
+            _selectionEndWorldTarget = _selectionStartWorld;
+            _selectionHasTarget = _selectionWorldValid;
+            Invalidate();
+        }
+
+        private void UpdatePointSelection(Point local)
+        {
+            var p = ClampPointerToViewport(local);
+            _lastMousePos = p;
+            if (TryProjectPointerToPlane(_gridPlaneY, p, out var projected))
+            {
+                _selectionEndWorldTarget = projected;
+                _selectionEndWorld = projected;
+                _selectionWorldValid = true;
+                _selectionHasTarget = true;
+            }
+            Invalidate();
+        }
+
+        private void EndPointSelection(Point local, KeyModifiers keyModifiers)
+        {
+            var p = ClampPointerToViewport(local);
+            _lastMousePos = p;
+            if (TryProjectPointerToPlane(_gridPlaneY, p, out var projectedEnd))
+            {
+                _selectionEndWorldTarget = projectedEnd;
+                _selectionEndWorld = projectedEnd;
+                _selectionWorldValid = true;
+                _selectionHasTarget = true;
+            }
+
+            _isPointSelecting = false;
+            bool append = keyModifiers.HasFlag(KeyModifiers.Shift) || _pressedKeys.Contains(Key.LeftShift) || _pressedKeys.Contains(Key.RightShift);
+
+            if (!append)
+            {
+                _selectionAreas.Clear();
+            }
+            if (_selectionWorldValid)
+            {
+                float minX = MathF.Min(_selectionStartWorld.X, _selectionEndWorld.X);
+                float maxX = MathF.Max(_selectionStartWorld.X, _selectionEndWorld.X);
+                float minZ = MathF.Min(_selectionStartWorld.Z, _selectionEndWorld.Z);
+                float maxZ = MathF.Max(_selectionStartWorld.Z, _selectionEndWorld.Z);
+                if ((maxX - minX) > 0.001f && (maxZ - minZ) > 0.001f)
+                {
+                    _selectionAreas.Add(new Vector4D<float>(minX, maxX, minZ, maxZ));
+                }
+            }
+            _renderer?.UpdateSelectionAreas(_selectionAreas.ToArray(), _gridPlaneY);
+
+            ApplyPointSelectionWorld(append);
         }
 
         private static Vector2D<float> WorldToScanLocal(ScanVolumeSettings s, Vector3D<float> p)
@@ -901,6 +1145,15 @@ namespace MeshTool.UI.Controls
             _lastGlobalMousePos = _topLevel != null ? e.GetPosition(_topLevel) : ptr.Position;
 
             bool leftOnly = ptr.Properties.IsLeftButtonPressed && !ptr.Properties.IsRightButtonPressed;
+            if (PointSelectionModeEnabled && leftOnly)
+            {
+                BeginPointSelection(ptr.Position);
+                e.Pointer.Capture(this);
+                Focus();
+                e.Handled = true;
+                return;
+            }
+
             if (ScanVolumeEditEnabled && leftOnly)
             {
                 if (StartScanHandleManipulation(ptr.Position))
@@ -912,7 +1165,7 @@ namespace MeshTool.UI.Controls
                 }
             }
 
-            if (ptr.Properties.IsRightButtonPressed || (ptr.Properties.IsLeftButtonPressed && _activeScanHandle == ScanHandleKind.None)) _isLooking = true;
+            if (ptr.Properties.IsRightButtonPressed || (ptr.Properties.IsLeftButtonPressed && !PointSelectionModeEnabled && _activeScanHandle == ScanHandleKind.None)) _isLooking = true;
             if (_isLooking)
             {
                 e.Pointer.Capture(this);
@@ -926,6 +1179,17 @@ namespace MeshTool.UI.Controls
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
         {
             base.OnPointerReleased(e);
+            if (_isPointSelecting)
+            {
+                EndPointSelection(e.GetCurrentPoint(this).Position, e.KeyModifiers);
+                if (e.Pointer.Captured == this)
+                {
+                    e.Pointer.Capture(null);
+                }
+                e.Handled = true;
+                return;
+            }
+
             _isScanDragging = false;
             _isScanAxisMove = false;
             _isScanRotating = false;
@@ -945,6 +1209,13 @@ namespace MeshTool.UI.Controls
             base.OnPointerMoved(e);
             var currentPos = e.GetCurrentPoint(this).Position;
             var delta = currentPos - _lastMousePos;
+
+            if (_isPointSelecting)
+            {
+                UpdatePointSelection(currentPos);
+                e.Handled = true;
+                return;
+            }
 
             if (ScanVolumeEditEnabled && !_isScanDragging && !_isScanAxisMove && !_isScanRotating && !_isScanScaling && !_isScanHeightAdjust)
             {
@@ -966,7 +1237,8 @@ namespace MeshTool.UI.Controls
                 return;
             }
 
-            bool pressed = e.GetCurrentPoint(this).Properties.IsRightButtonPressed || (e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && (_hoverScanHandle == ScanHandleKind.None || !ScanVolumeEditEnabled));
+            bool pressed = e.GetCurrentPoint(this).Properties.IsRightButtonPressed ||
+                           (!PointSelectionModeEnabled && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed && (_hoverScanHandle == ScanHandleKind.None || !ScanVolumeEditEnabled));
             if (_isLooking || pressed)
             {
                 Camera.Look((float)delta.X, (float)delta.Y);
@@ -992,6 +1264,28 @@ namespace MeshTool.UI.Controls
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
+
+            if (PointSelectionModeEnabled && e.Key == Key.Delete)
+            {
+                OnDeleteSelectionRequested?.Invoke();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Escape)
+            {
+                ClearPointSelection();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.G)
+            {
+                OnToggleSelectionModeRequested?.Invoke();
+                e.Handled = true;
+                return;
+            }
+
             _pressedKeys.Add(e.Key);
             Invalidate();
             e.Handled = true;
@@ -1007,6 +1301,29 @@ namespace MeshTool.UI.Controls
 
         private void OnTopLevelKeyDown(object? sender, KeyEventArgs e)
         {
+            if (IsKeyboardFocusWithin)
+            {
+                return;
+            }
+
+            if (PointSelectionModeEnabled && e.Key == Key.Delete)
+            {
+                OnDeleteSelectionRequested?.Invoke();
+                return;
+            }
+
+            if (e.Key == Key.Escape)
+            {
+                ClearPointSelection();
+                return;
+            }
+
+            if (e.Key == Key.G)
+            {
+                OnToggleSelectionModeRequested?.Invoke();
+                return;
+            }
+
             _pressedKeys.Add(e.Key);
             Invalidate();
         }
@@ -1019,6 +1336,11 @@ namespace MeshTool.UI.Controls
 
         private void OnTopLevelPointerPressed(object? sender, PointerPressedEventArgs e)
         {
+            if (_isPointSelecting)
+            {
+                return;
+            }
+
             var local = e.GetPosition(this);
             bool inside = local.X >= 0 && local.Y >= 0 && local.X <= Bounds.Width && local.Y <= Bounds.Height;
             if (!inside)
@@ -1027,6 +1349,14 @@ namespace MeshTool.UI.Controls
             }
 
             var props = e.GetCurrentPoint(this).Properties;
+            if (PointSelectionModeEnabled && props.IsLeftButtonPressed && !props.IsRightButtonPressed)
+            {
+                BeginPointSelection(local);
+                e.Pointer.Capture(this);
+                Focus();
+                return;
+            }
+
             if (ScanVolumeEditEnabled && props.IsLeftButtonPressed && !props.IsRightButtonPressed && StartScanHandleManipulation(local))
             {
                 _lastMousePos = local;
@@ -1035,7 +1365,7 @@ namespace MeshTool.UI.Controls
                 return;
             }
 
-            if (props.IsRightButtonPressed || props.IsLeftButtonPressed)
+            if (props.IsRightButtonPressed || (!PointSelectionModeEnabled && props.IsLeftButtonPressed))
             {
                 _isLooking = true;
                 _lastMousePos = local;
@@ -1048,6 +1378,13 @@ namespace MeshTool.UI.Controls
         private void OnTopLevelPointerMoved(object? sender, PointerEventArgs e)
         {
             var currentGlobal = _topLevel != null ? e.GetPosition(_topLevel) : e.GetPosition(this);
+
+            if (_isPointSelecting)
+            {
+                UpdatePointSelection(e.GetPosition(this));
+                _lastGlobalMousePos = currentGlobal;
+                return;
+            }
 
             if (_isLooking)
             {
@@ -1097,6 +1434,17 @@ namespace MeshTool.UI.Controls
 
         private void OnTopLevelPointerReleased(object? sender, PointerReleasedEventArgs e)
         {
+            if (_isPointSelecting)
+            {
+                EndPointSelection(e.GetPosition(this), e.KeyModifiers);
+                if (e.Pointer.Captured == this)
+                {
+                    e.Pointer.Capture(null);
+                }
+                Invalidate();
+                return;
+            }
+
             _isLooking = false;
             _isScanDragging = false;
             _isScanAxisMove = false;

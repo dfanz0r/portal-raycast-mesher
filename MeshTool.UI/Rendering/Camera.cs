@@ -76,23 +76,26 @@ namespace MeshTool.UI.Rendering
 
         public (Vector3D<float> Origin, Vector3D<float> Direction) GetRay(float mouseX, float mouseY, float screenWidth, float screenHeight)
         {
-            float ndcX = (mouseX / screenWidth) * 2.0f - 1.0f;
-            float ndcY = 1.0f - (mouseY / screenHeight) * 2.0f; // Invert Y
+            float w = MathF.Max(1.0f, screenWidth);
+            float h = MathF.Max(1.0f, screenHeight);
+            float ndcX = (mouseX / w) * 2.0f - 1.0f;
+            float ndcY = 1.0f - (mouseY / h) * 2.0f; // Invert Y
 
-            var proj = GetProjectionMatrix(screenWidth, screenHeight);
-            var view = GetViewMatrix();
+            float aspectRatio = w / h;
+            float fov = MathF.PI / 3.0f;
+            float tanHalfFov = MathF.Tan(fov / 2.0f);
 
-            Matrix4X4.Invert(view * proj, out var invViewProj);
+            var forward = GetForward();
+            var upWorld = new Vector3D<float>(0, 1, 0);
+            var right = Vector3D.Normalize(Vector3D.Cross(forward, upWorld));
+            var up = Vector3D.Normalize(Vector3D.Cross(right, forward));
 
-            // Reverse-Z infinite far: z_ndc = -1 is at infinity.
-            // Use z_ndc = 0 for the second sample to keep a finite point.
-            var nearPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, 1.0f, 1.0f), invViewProj);
-            var farPoint = Vector4D.Transform(new Vector4D<float>(ndcX, ndcY, 0.0f, 1.0f), invViewProj);
+            var dir = Vector3D.Normalize(
+                forward +
+                right * (ndcX * aspectRatio * tanHalfFov) +
+                up * (ndcY * tanHalfFov));
 
-            var near = new Vector3D<float>(nearPoint.X / nearPoint.W, nearPoint.Y / nearPoint.W, nearPoint.Z / nearPoint.W);
-            var far = new Vector3D<float>(farPoint.X / farPoint.W, farPoint.Y / farPoint.W, farPoint.Z / farPoint.W);
-
-            return (near, Vector3D.Normalize(far - near));
+            return (Position, dir);
         }
 
         private Vector3D<float> GetForward()
