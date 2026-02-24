@@ -17,11 +17,16 @@ namespace MeshTool.Core
     {
         static async Task<int> Main(string[] args)
         {
+            // Initialize logger for CLI
+            Logger.EnableFileLogging();
+            Logger.Info("MeshTool CLI started");
+
             var cmd = CommandLineArgs.Parse(args);
 
             if (cmd.Command == "help" || cmd.HasFlag("help") || cmd.HasFlag("h") || cmd.HasFlag("?"))
             {
                 ShowHelp();
+                Logger.Shutdown();
                 return 0;
             }
 
@@ -34,8 +39,9 @@ namespace MeshTool.Core
                 }
                 else
                 {
-                    Console.WriteLine("Usage: merge <pathA> <pathB> <pathOut>");
+                    Logger.Warning("Usage: merge <pathA> <pathB> <pathOut>");
                 }
+                Logger.Shutdown();
                 return 0;
             }
 
@@ -52,11 +58,12 @@ namespace MeshTool.Core
                     cts.Cancel();
                 };
 
-                Console.WriteLine($"[MONITOR] Log: {logPath}");
-                Console.WriteLine($"[MONITOR] DB:  {dbPath}");
-                Console.WriteLine("[MONITOR] Ctrl+C to stop.");
+                Logger.Info($"[MONITOR] Log: {logPath}");
+                Logger.Info($"[MONITOR] DB:  {dbPath}");
+                Logger.Info("[MONITOR] Ctrl+C to stop.");
 
                 await MonitorRunner.RunAsync(logPath, dbPath, cts.Token);
+                Logger.Shutdown();
                 return 0;
             }
 
@@ -65,7 +72,7 @@ namespace MeshTool.Core
             // Output defaults to db name .glb, unless overridden
             string objPath = cmd.GetOption("out", $"{dbName}.glb");
 
-            Console.WriteLine("=== BATTLEFIELD RAYCAST MESHER ===");
+            Logger.Info("=== BATTLEFIELD RAYCAST MESHER ===");
 
             // 1. Load Data
             List<Vertex> masterPoints;
@@ -76,11 +83,11 @@ namespace MeshTool.Core
                 try
                 {
                     DatabaseIO.LoadDatabase(dbPath, out masterPoints, out masterMisses);
-                    Console.WriteLine($"[DB] Loaded: {masterPoints.Count} points, {masterMisses.Count} rays from {dbPath}");
+                    Logger.Info($"[DB] Loaded: {masterPoints.Count} points, {masterMisses.Count} rays from {dbPath}");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[DB] Error loading DB: {ex.Message}. Starting fresh.");
+                    Logger.Error($"[DB] Error loading DB: {ex.Message}. Starting fresh.");
                     masterPoints = new List<Vertex>();
                     masterMisses = new List<Ray>();
                 }
@@ -89,7 +96,7 @@ namespace MeshTool.Core
             {
                 masterPoints = new List<Vertex>();
                 masterMisses = new List<Ray>();
-                Console.WriteLine("[DB] No existing database found. Starting fresh.");
+                Logger.Info("[DB] No existing database found. Starting fresh.");
             }
 
             // 2. Process New Log Data
@@ -100,52 +107,54 @@ namespace MeshTool.Core
 
                 LogParser.ParseLog(logPath, out newPoints, out newMisses);
 
-                Console.WriteLine($"[LOG] Found New Points: {newPoints.Count}");
-                Console.WriteLine($"[LOG] Found New Misses: {newMisses.Count}");
+                Logger.Info($"[LOG] Found New Points: {newPoints.Count}");
+                Logger.Info($"[LOG] Found New Misses: {newMisses.Count}");
 
                 if (newPoints.Count > 0 || newMisses.Count > 0)
                 {
                     int addedPoints = PointMerger.MergePoints(masterPoints, newPoints, Settings.MIN_MERGE_DISTANCE);
                     masterMisses.AddRange(newMisses);
 
-                    Console.WriteLine($"[MERGE] Integrated {addedPoints} unique points.");
+                    Logger.Info($"[MERGE] Integrated {addedPoints} unique points.");
 
                     DatabaseIO.SaveDatabase(masterPoints, masterMisses, dbPath);
 
                     try
                     {
                         File.WriteAllText(logPath, string.Empty);
-                        Console.WriteLine("[LOG] Log file cleared successfully.");
+                        Logger.Info("[LOG] Log file cleared successfully.");
                     }
                     catch
                     {
-                        Console.WriteLine("[WARN] Could not clear log file.");
+                        Logger.Warning("[WARN] Could not clear log file.");
                     }
                 }
             }
 
             if (cmd.Command == "update")
             {
-                Console.WriteLine("[DONE] Database updated. Meshing skipped.");
+                Logger.Info("[DONE] Database updated. Meshing skipped.");
+                Logger.Shutdown();
                 return 0;
             }
 
             if (masterPoints.Count < 3)
             {
-                Console.WriteLine("[STOP] Not enough points to generate a mesh.");
+                Logger.Warning("[STOP] Not enough points to generate a mesh.");
+                Logger.Shutdown();
                 return 0;
             }
 
             Stopwatch sw = Stopwatch.StartNew();
 
             // 3. Constructive Geometry (Delaunay Meshing)
-            Console.WriteLine("[MESH] Building Adaptive Mesh...");
+            Logger.Info("[MESH] Building Adaptive Mesh...");
             var allTriangles = DelaunayMesher.GenerateMesh(masterPoints, null, null);
 
             // 4. Destructive Geometry (Space Carving)
             if (masterMisses.Count > 0)
             {
-                Console.WriteLine("[MESH] Building Triangle Quadtree for acceleration...");
+                Logger.Info("[MESH] Building Triangle Quadtree for acceleration...");
 
                 // Calculate bounds
                 double minX = double.MaxValue, maxX = double.MinValue;
@@ -165,9 +174,9 @@ namespace MeshTool.Core
 
                 var quadtree = TriangleQuadtree.Build(allTriangles, meshBounds);
 
-                Console.WriteLine($"[CARVE] Raycasting {masterMisses.Count} miss rays against the mesh...");
+                Logger.Info($"[CARVE] Raycasting {masterMisses.Count} miss rays against the mesh...");
                 int removed = SpaceCarver.CarveMesh(quadtree, masterMisses);
-                Console.WriteLine($"[CARVE] Pruned {removed} triangles intersecting empty space.");
+                Logger.Info($"[CARVE] Pruned {removed} triangles intersecting empty space.");
 
                 // Remove the deleted triangles from the list
                 allTriangles = allTriangles.Where(t => !t.IsDeleted).ToList();
@@ -184,20 +193,20 @@ namespace MeshTool.Core
                 out removedBoundary);
             if (removedBoundary > 0)
             {
-                Console.WriteLine($"[MESH] Removed {removedBoundary} weak boundary triangles.");
+                Logger.Info($"[MESH] Removed {removedBoundary} weak boundary triangles.");
             }
 
             int removedSkinny;
             allTriangles = DelaunayMesher.FilterHighAspectRatioTriangles(allTriangles, Settings.MAX_TRIANGLE_ASPECT_RATIO, out removedSkinny);
             if (removedSkinny > 0)
             {
-                Console.WriteLine($"[MESH] Removed {removedSkinny} skinny triangles (aspect > {Settings.MAX_TRIANGLE_ASPECT_RATIO:F1}).");
+                Logger.Info($"[MESH] Removed {removedSkinny} skinny triangles (aspect > {Settings.MAX_TRIANGLE_ASPECT_RATIO:F1}).");
             }
 
-            Console.WriteLine($"[MESH] Final Triangle Count: {allTriangles.Count}");
+            Logger.Info($"[MESH] Final Triangle Count: {allTriangles.Count}");
 
             sw.Stop();
-            Console.WriteLine($"[DONE] Total Processing Time: {sw.Elapsed.TotalSeconds:F2}s");
+            Logger.Info($"[DONE] Total Processing Time: {sw.Elapsed.TotalSeconds:F2}s");
 
             // 5. Export Result
             if (objPath.EndsWith(".glb", StringComparison.OrdinalIgnoreCase))
@@ -206,15 +215,16 @@ namespace MeshTool.Core
             }
             else if (objPath.EndsWith(".xyz", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine($"[EXPORT] Generating XYZ point cloud for {masterPoints.Count} points...");
+                Logger.Info($"[EXPORT] Generating XYZ point cloud for {masterPoints.Count} points...");
                 XyzExporter.ExportXyz(masterPoints, objPath);
-                Console.WriteLine($"[EXPORT] Saved XYZ to {objPath}");
+                Logger.Info($"[EXPORT] Saved XYZ to {objPath}");
             }
             else
             {
                 ObjExporter.ExportObj(masterPoints, allTriangles, objPath);
             }
 
+            Logger.Shutdown();
             return 0;
         }
 
@@ -234,7 +244,7 @@ namespace MeshTool.Core
             }
             catch
             {
-                Console.WriteLine($"[MERGE] Could not load {pathA}. Creating empty.");
+                Logger.Warning($"[MERGE] Could not load {pathA}. Creating empty.");
                 pointsA = new List<Vertex>();
                 raysA = new List<Ray>();
             }
@@ -245,17 +255,17 @@ namespace MeshTool.Core
             }
             catch
             {
-                Console.WriteLine($"[MERGE] Could not load {pathB}. Skipping.");
+                Logger.Error($"[MERGE] Could not load {pathB}. Skipping.");
                 return;
             }
 
-            Console.WriteLine($"[MERGE] Merging DB B ({pointsB.Count} pts, {raysB.Count} rays) into DB A ({pointsA.Count} pts, {raysA.Count} rays)...");
+            Logger.Info($"[MERGE] Merging DB B ({pointsB.Count} pts, {raysB.Count} rays) into DB A ({pointsA.Count} pts, {raysA.Count} rays)...");
 
             int addedPoints = PointMerger.MergePoints(pointsA, pointsB, Settings.MIN_MERGE_DISTANCE);
             raysA.AddRange(raysB);
 
             DatabaseIO.SaveDatabase(pointsA, raysA, pathOut);
-            Console.WriteLine($"[MERGE] Integrated {addedPoints} points and {raysB.Count} rays. Total: {pointsA.Count} pts, {raysA.Count} rays. Saved: {pathOut}");
+            Logger.Info($"[MERGE] Integrated {addedPoints} points and {raysB.Count} rays. Total: {pointsA.Count} pts, {raysA.Count} rays. Saved: {pathOut}");
         }
 
         static string ResolveDatabasePath(CommandLineArgs cmd)

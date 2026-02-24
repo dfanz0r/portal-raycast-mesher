@@ -55,7 +55,7 @@ namespace MeshTool.Core.IO
                     sw.WriteLine($"f {f.A}//{f.A} {f.B}//{f.B} {f.C}//{f.C}");
                 }
             }
-            Console.WriteLine($"[EXPORT] Saved {Path.GetFullPath(path)}");
+            Logger.Info($"[EXPORT] Saved {Path.GetFullPath(path)}");
         }
     }
 }

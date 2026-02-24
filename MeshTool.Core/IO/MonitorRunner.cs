@@ -49,7 +49,7 @@ namespace MeshTool.Core.IO
         public static async Task RunAsync(string logPath, string dbPath, CancellationToken cancellationToken, MonitorRunOptions? options)
         {
             options ??= new MonitorRunOptions();
-            Action<string> log = options.Log ?? Console.WriteLine;
+            Action<string> log = options.Log ?? Logger.Info;
 
             // Load DB snapshot
             List<Vertex> masterPoints;

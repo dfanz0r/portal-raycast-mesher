@@ -15,7 +15,7 @@ namespace MeshTool.Core.IO
     {
         public static void ExportGlb(List<Triangle> triangles, string path)
         {
-            Console.WriteLine($"[EXPORT] Generating GLB for {triangles.Count} triangles...");
+            Logger.Info($"[EXPORT] Generating GLB for {triangles.Count} triangles...");
 
             // 1. Create Material
             var material = new MaterialBuilder("DefaultMaterial")
@@ -42,7 +42,7 @@ namespace MeshTool.Core.IO
 
             // 5. Save
             scene.ToGltf2().SaveGLB(path);
-            Console.WriteLine($"[EXPORT] Saved GLB to {path}");
+            Logger.Info($"[EXPORT] Saved GLB to {path}");
         }
 
         private static VertexPositionNormal ToGltfVertex(Vertex v)

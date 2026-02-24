@@ -187,5 +187,61 @@
             <Setter Property="Background" Value="{StaticResource EngineControlHoverBgBrush}"/>
             <Setter Property="BorderBrush" Value="#555555"/>
         </Style>
+
+        <!-- ToggleButton Style -->
+        <Style Selector="ToggleButton">
+            <Setter Property="Background" Value="{StaticResource EngineControlBgBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource EngineTextBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="MinHeight" Value="26"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="ToggleButton:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource EngineControlHoverBgBrush}"/>
+            <Setter Property="BorderBrush" Value="#555555"/>
+        </Style>
+        <Style Selector="ToggleButton:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource EngineAccentBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource EngineAccentHoverBrush}"/>
+            <Setter Property="TextBlock.Foreground" Value="White"/>
+        </Style>
+
+        <!-- ScrollViewer Styles for Side Panel -->
+        <Style Selector="ScrollViewer.sidePanel">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Padding" Value="0"/>
+        </Style>
+        <Style Selector="ScrollViewer.sidePanel /template/ Border#PART_ScrollBarMargins">
+            <Setter Property="Grid.Column" Value="1"/>
+        </Style>
+        
+        <!-- ScrollBar Styles -->
+        <Style Selector="ScrollBar">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Width" Value="12"/>
+        </Style>
+        <Style Selector="ScrollBar:vertical /template/ Track#PART_Track">
+            <Setter Property="Width" Value="10"/>
+        </Style>
+        <Style Selector="ScrollBar:vertical /template/ Thumb">
+            <Setter Property="Background" Value="#666666"/>
+            <Setter Property="CornerRadius" Value="5"/>
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinHeight" Value="30"/>
+        </Style>
+        <Style Selector="ScrollBar:vertical:pointerover /template/ Thumb">
+            <Setter Property="Background" Value="#888888"/>
+        </Style>
+        <Style Selector="ScrollBar:vertical:pressed /template/ Thumb">
+            <Setter Property="Background" Value="{StaticResource EngineAccentBrush}"/>
+        </Style>
+        <Style Selector="ScrollBar /template/ RepeatButton">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Width" Value="10"/>
+        </Style>
     </Application.Styles>
 </Application>

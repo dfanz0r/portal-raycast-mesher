@@ -4,6 +4,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using MeshTool.Core.Data;
 using MeshTool.Core.Config;
+using MeshTool.Core.IO;
 
 namespace MeshTool.Core.Algorithms
 {
@@ -11,11 +12,11 @@ namespace MeshTool.Core.Algorithms
     {
         public static List<Triangle> GenerateMesh(List<Vertex> inputPoints, Action<float[], int>? onProgressRaw = null, Func<bool>? isRendererBusy = null)
         {
-            Console.WriteLine("[MESH] Starting Global Delaunay Triangulation...");
+            Logger.Info("[MESH] Starting Global Delaunay Triangulation...");
 
             // 1. Deduplicate (Critical for stability)
             var points = Deduplicate(inputPoints);
-            Console.WriteLine($"[MESH] Processing {points.Count} unique points.");
+            Logger.Info($"[MESH] Processing {points.Count} unique points.");
 
             if (points.Count < 3) return new List<Triangle>();
 
@@ -46,7 +47,7 @@ namespace MeshTool.Core.Algorithms
             System.Threading.Tasks.Task? progressTask = null;
             foreach (var p in points)
             {
-                if (++count % 10000 == 0) Console.Write(".");
+                if (++count % 10000 == 0) Logger.Debug(".");
 
                 // Step A: Locate the triangle containing point p (or close to it)
                 Triangle? startNode = FindTriangleContainingPoint(lastTri, p.Position);
@@ -240,7 +241,7 @@ namespace MeshTool.Core.Algorithms
                     }
                 }
             }
-            Console.WriteLine();
+            Logger.Debug("");
 
             // 4. Final Cleanup
             var finalTriangles = new List<Triangle>();
@@ -256,7 +257,7 @@ namespace MeshTool.Core.Algorithms
                 finalTriangles.Add(t);
             }
 
-            Console.WriteLine($"[MESH] Generated {finalTriangles.Count} triangles.");
+            Logger.Info($"[MESH] Generated {finalTriangles.Count} triangles.");
             return finalTriangles;
         }
 
@@ -705,7 +706,7 @@ namespace MeshTool.Core.Algorithms
         {
             double v0x = b.X - a.X; double v0z = b.Z - a.Z;
             double v1x = c.X - a.X; double v1z = c.Z - a.Z;
-            double v2x = px - a.X;  double v2z = pz - a.Z;
+            double v2x = px - a.X; double v2z = pz - a.Z;
 
             double den = v0x * v1z - v1x * v0z;
             if (Math.Abs(den) < 1e-12)

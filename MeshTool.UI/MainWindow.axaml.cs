@@ -57,6 +57,10 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        // Initialize logger with file output
+        InitializeLogger();
+
         Viewport.OnLog = Log;
         Viewport.OnHoveredCoordinateChanged = OnHoveredCoordinateChanged;
         Viewport.OnMoveSpeedChanged = OnMoveSpeedChanged;
@@ -73,6 +77,58 @@ public partial class MainWindow : Window
         SyncScanControls(Viewport.ScanVolume);
         UpdateMeshUiState();
         ApplyInteractionMode();
+    }
+
+    private void InitializeLogger()
+    {
+        // Subscribe to logger events for UI updates
+        Logger.LogAdded += OnLoggerMessage;
+
+        // Enable file logging
+        if (Logger.EnableFileLogging())
+        {
+            Logger.Info("MeshTool UI started");
+            Logger.Info($"Log file: {Logger.LogFilePath}");
+        }
+    }
+
+    private void OnLoggerMessage(object? sender, LogEventArgs e)
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            _logLines.Add(e.Message);
+            while (_logLines.Count > 200)
+            {
+                _logLines.RemoveAt(0);
+            }
+
+            // Update console count
+            if (TxtConsoleCount != null)
+            {
+                TxtConsoleCount.Text = _logLines.Count > 0 ? $"{_logLines.Count} lines" : string.Empty;
+            }
+
+            if (_logLines.Count == 0 || !LstConsole.IsVisible)
+            {
+                return;
+            }
+
+            // Defer scrolling to avoid arrange-time virtualization crashes.
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                try
+                {
+                    if (_logLines.Count > 0)
+                    {
+                        LstConsole.ScrollIntoView(_logLines[^1]);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // Layout may still be in progress; safe to skip this frame.
+                }
+            }, Avalonia.Threading.DispatcherPriority.Background);
+        });
     }
 
     private void UpdateMeshUiState()
@@ -134,14 +190,14 @@ public partial class MainWindow : Window
     private void SyncScanControls(ScanVolumeSettings s)
     {
         _isSyncingScanControls = true;
-        TxtScanCenterX.Text = s.CenterX.ToString("F2", CultureInfo.InvariantCulture);
-        TxtScanCenterZ.Text = s.CenterZ.ToString("F2", CultureInfo.InvariantCulture);
-        TxtScanSizeX.Text = s.SizeX.ToString("F2", CultureInfo.InvariantCulture);
-        TxtScanSizeZ.Text = s.SizeZ.ToString("F2", CultureInfo.InvariantCulture);
-        TxtScanYTop.Text = s.YTop.ToString("F2", CultureInfo.InvariantCulture);
-        TxtScanYBottom.Text = s.YBottom.ToString("F2", CultureInfo.InvariantCulture);
-        TxtScanYaw.Text = s.YawDegrees.ToString("F2", CultureInfo.InvariantCulture);
-        TxtScanRayTilt.Text = s.RayTiltDegrees.ToString("F2", CultureInfo.InvariantCulture);
+        TxtScanCenterX.Text = s.CenterX.ToString("F1", CultureInfo.InvariantCulture);
+        TxtScanCenterZ.Text = s.CenterZ.ToString("F1", CultureInfo.InvariantCulture);
+        TxtScanSizeX.Text = s.SizeX.ToString("F1", CultureInfo.InvariantCulture);
+        TxtScanSizeZ.Text = s.SizeZ.ToString("F1", CultureInfo.InvariantCulture);
+        TxtScanYTop.Text = s.YTop.ToString("F1", CultureInfo.InvariantCulture);
+        TxtScanYBottom.Text = s.YBottom.ToString("F1", CultureInfo.InvariantCulture);
+        TxtScanYaw.Text = s.YawDegrees.ToString("F1", CultureInfo.InvariantCulture);
+        TxtScanRayTilt.Text = s.RayTiltDegrees.ToString("F1", CultureInfo.InvariantCulture);
         SldScanDensity.Value = CellToDensity(s.ProbeCellSize);
         SldFineDensity.Value = FineStepToDensity(_finePhaseTargetStep);
         UpdateDensityMetersLabels(s.ProbeCellSize, _finePhaseTargetStep);
@@ -448,41 +504,33 @@ public partial class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _monitorCts?.Cancel();
+        Logger.Info("MeshTool UI closed");
+        Logger.Shutdown();
         base.OnClosed(e);
     }
 
     private void Log(string message)
     {
-        Console.WriteLine(message);
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        // Use the Logger service for all logging
+        Logger.Info(message);
+    }
+
+    private void BtnToggleConsole_Click(object? sender, RoutedEventArgs e)
+    {
+        if (ConsolePanel != null)
         {
-            _logLines.Add(message);
-            while (_logLines.Count > 200)
-            {
-                _logLines.RemoveAt(0);
-            }
+            ConsolePanel.IsVisible = BtnToggleConsole.IsChecked == true;
+        }
+    }
 
-            if (_logLines.Count == 0 || !LstConsole.IsVisible)
-            {
-                return;
-            }
-
-            // Defer scrolling to avoid arrange-time virtualization crashes.
-            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-            {
-                try
-                {
-                    if (_logLines.Count > 0)
-                    {
-                        LstConsole.ScrollIntoView(_logLines[^1]);
-                    }
-                }
-                catch (InvalidOperationException)
-                {
-                    // Layout may still be in progress; safe to skip this frame.
-                }
-            }, Avalonia.Threading.DispatcherPriority.Background);
-        });
+    private void BtnClearConsole_Click(object? sender, RoutedEventArgs e)
+    {
+        _logLines.Clear();
+        Logger.ClearRecentLogs();
+        if (TxtConsoleCount != null)
+        {
+            TxtConsoleCount.Text = string.Empty;
+        }
     }
 
     private static string ResolvePortalLogPath()
