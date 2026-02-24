@@ -27,9 +27,9 @@ namespace MeshTool.Core.Algorithms
             double midZ = bounds.MidZ;
 
             // Large super triangle
-            Vertex s1 = new Vertex { Position = new Vector3(midX - 20 * maxDim, 0, midZ - maxDim) };
-            Vertex s2 = new Vertex { Position = new Vector3(midX, 0, midZ + 20 * maxDim) };
-            Vertex s3 = new Vertex { Position = new Vector3(midX + 20 * maxDim, 0, midZ - maxDim) };
+            Vertex s1 = new Vertex { Position = new Vector3(midX - MeshGeneration.SuperTriangleScale * maxDim, 0, midZ - maxDim) };
+            Vertex s2 = new Vertex { Position = new Vector3(midX, 0, midZ + MeshGeneration.SuperTriangleScale * maxDim) };
+            Vertex s3 = new Vertex { Position = new Vector3(midX + MeshGeneration.SuperTriangleScale * maxDim, 0, midZ - maxDim) };
 
             Triangle superTri = new Triangle(s1, s2, s3);
             List<Triangle> triangles = new List<Triangle> { superTri };
@@ -272,7 +272,7 @@ namespace MeshTool.Core.Algorithms
         {
             Triangle curr = start;
             int safety = 0;
-            while (safety++ < 5000)
+            while (safety++ < MeshGeneration.MaxWalkIterations)
             {
                 if (curr.IsBad) return null;
 
@@ -313,7 +313,7 @@ namespace MeshTool.Core.Algorithms
             double cx = t.C.Position.X, cz = t.C.Position.Z;
 
             double D = 2 * (ax * (bz - cz) + bx * (cz - az) + cx * (az - bz));
-            if (Math.Abs(D) < 1e-9) return false;
+            if (Math.Abs(D) < MeshGeneration.GeometricEpsilon) return false;
 
             double centerX = ((ax * ax + az * az) * (bz - cz) + (bx * bx + bz * bz) * (cz - az) + (cx * cx + cz * cz) * (az - bz)) / D;
             double centerZ = ((ax * ax + az * az) * (cx - bx) + (bx * bx + bz * bz) * (ax - cx) + (cx * cx + cz * cz) * (bx - ax)) / D;
@@ -321,7 +321,7 @@ namespace MeshTool.Core.Algorithms
             double rSq = (centerX - ax) * (centerX - ax) + (centerZ - az) * (centerZ - az);
             double dSq = (centerX - p.X) * (centerX - p.X) + (centerZ - p.Z) * (centerZ - p.Z);
 
-            return dSq < rSq - 1e-10;
+            return dSq < rSq - MeshGeneration.CircumcircleEpsilon;
         }
 
         private static List<Vertex> Deduplicate(List<Vertex> input)

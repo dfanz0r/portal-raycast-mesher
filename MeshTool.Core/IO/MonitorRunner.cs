@@ -10,21 +10,82 @@ using MeshTool.Core.Data;
 
 namespace MeshTool.Core.IO
 {
+    /// <summary>
+    /// Options for configuring monitor run behavior.
+    /// </summary>
     public sealed class MonitorRunOptions
     {
+        /// <summary>
+        /// Whether to start tailing at the end of the file. Default is true.
+        /// </summary>
         public bool StartAtEnd { get; init; } = true;
+
+        /// <summary>
+        /// Maximum number of lines to buffer in the channel. Default is 8192.
+        /// </summary>
         public int ChannelCapacity { get; init; } = 8192;
+
+        /// <summary>
+        /// Interval for flushing pending data. Default is 200ms.
+        /// </summary>
         public TimeSpan FlushInterval { get; init; } = TimeSpan.FromMilliseconds(200);
+
+        /// <summary>
+        /// Number of pending items that triggers an immediate flush. Default is 500.
+        /// </summary>
         public int FlushThreshold { get; init; } = 500;
+
+        /// <summary>
+        /// Minimum idle time before a save is allowed. Default is 1 second.
+        /// </summary>
         public TimeSpan SaveDebounce { get; init; } = TimeSpan.FromSeconds(1);
+
+        /// <summary>
+        /// Minimum interval between saves. Default is 5 seconds.
+        /// </summary>
         public TimeSpan SaveMinInterval { get; init; } = TimeSpan.FromSeconds(5);
+
+        /// <summary>
+        /// Maximum interval between saves. Default is 30 seconds.
+        /// </summary>
         public TimeSpan SaveMaxInterval { get; init; } = TimeSpan.FromSeconds(30);
+
+        /// <summary>
+        /// Whether to include full snapshots in updates. Default is false.
+        /// </summary>
         public bool IncludeSnapshots { get; init; } = false;
+
+        /// <summary>
+        /// Minimum interval between snapshots. Default is 500ms.
+        /// </summary>
         public TimeSpan SnapshotMinInterval { get; init; } = TimeSpan.FromMilliseconds(500);
+
+        /// <summary>
+        /// Optional logging callback. Defaults to Logger.Info if not specified.
+        /// </summary>
         public Action<string>? Log { get; init; }
+
+        /// <summary>
+        /// Callback for receiving monitor updates.
+        /// </summary>
         public Action<MonitorUpdate>? OnUpdate { get; init; }
     }
 
+    /// <summary>
+    /// Represents an update from the monitor runner.
+    /// </summary>
+    /// <param name="AddedPoints">Number of points added in this update.</param>
+    /// <param name="AddedMisses">Number of miss rays added in this update.</param>
+    /// <param name="TotalPoints">Total number of points in the database.</param>
+    /// <param name="TotalMisses">Total number of miss rays in the database.</param>
+    /// <param name="ProcessedLines">Number of lines processed since monitoring started.</param>
+    /// <param name="ApproxFileLine">Approximate current line number in the file.</param>
+    /// <param name="AvgDistance">Estimated average distance between points.</param>
+    /// <param name="PointsSnapshot">Full snapshot of points (if requested).</param>
+    /// <param name="MissesSnapshot">Full snapshot of miss rays (if requested).</param>
+    /// <param name="NewPoints">Array of newly added points.</param>
+    /// <param name="NewMisses">Array of newly added miss rays.</param>
+    /// <param name="IsFinal">Whether this is the final update.</param>
     public readonly record struct MonitorUpdate(
         int AddedPoints,
         int AddedMisses,
@@ -39,15 +100,36 @@ namespace MeshTool.Core.IO
         Ray[]? NewMisses,
         bool IsFinal);
 
+    /// <summary>
+    /// Runs monitoring of a log file, parsing and accumulating points and miss rays.
+    /// </summary>
     public static class MonitorRunner
     {
+        /// <summary>
+        /// Runs the monitor with default options.
+        /// </summary>
+        /// <param name="logPath">Path to the log file to monitor.</param>
+        /// <param name="dbPath">Path to the database file for persistence.</param>
+        /// <param name="cancellationToken">Token to cancel monitoring.</param>
         public static async Task RunAsync(string logPath, string dbPath, CancellationToken cancellationToken)
         {
             await RunAsync(logPath, dbPath, cancellationToken, null);
         }
 
+        /// <summary>
+        /// Runs the monitor with specified options.
+        /// </summary>
+        /// <param name="logPath">Path to the log file to monitor.</param>
+        /// <param name="dbPath">Path to the database file for persistence.</param>
+        /// <param name="cancellationToken">Token to cancel monitoring.</param>
+        /// <param name="options">Optional configuration options.</param>
         public static async Task RunAsync(string logPath, string dbPath, CancellationToken cancellationToken, MonitorRunOptions? options)
         {
+            if (string.IsNullOrEmpty(logPath))
+                throw new ArgumentNullException(nameof(logPath));
+            if (string.IsNullOrEmpty(dbPath))
+                throw new ArgumentNullException(nameof(dbPath));
+
             options ??= new MonitorRunOptions();
             Action<string> log = options.Log ?? Logger.Info;
 
@@ -91,10 +173,9 @@ namespace MeshTool.Core.IO
             DateTime lastSaveUtc = DateTime.MinValue;
             DateTime lastSnapshotUtc = DateTime.MinValue;
 
-            double minX, maxX, minZ, maxZ;
-            bool hasBounds;
-            ScanBoundsXZ(masterPoints, out minX, out maxX, out minZ, out maxZ, out hasBounds);
-            float avgDistance = EstimateAverageSpacing(masterPoints.Count, minX, maxX, minZ, maxZ, hasBounds);
+            // Calculate initial bounds and spacing
+            var initialBounds = PointAnalysis.CalculateBoundsXZ(masterPoints, out bool hasBounds);
+            float avgDistance = PointAnalysis.EstimateSpacingFromDensity(masterPoints.Count, in initialBounds);
 
             var lineChannel = Channel.CreateBounded<string>(new BoundedChannelOptions(options.ChannelCapacity)
             {
@@ -162,19 +243,24 @@ namespace MeshTool.Core.IO
                                         var p = newPointsArray[i].Position;
                                         if (!hasBounds)
                                         {
-                                            minX = maxX = p.X;
-                                            minZ = maxZ = p.Z;
+                                            initialBounds = new Bounds
+                                            {
+                                                MinX = p.X,
+                                                MaxX = p.X,
+                                                MinZ = p.Z,
+                                                MaxZ = p.Z
+                                            };
                                             hasBounds = true;
                                         }
                                         else
                                         {
-                                            if (p.X < minX) minX = p.X;
-                                            if (p.X > maxX) maxX = p.X;
-                                            if (p.Z < minZ) minZ = p.Z;
-                                            if (p.Z > maxZ) maxZ = p.Z;
+                                            if (p.X < initialBounds.MinX) initialBounds.MinX = p.X;
+                                            if (p.X > initialBounds.MaxX) initialBounds.MaxX = p.X;
+                                            if (p.Z < initialBounds.MinZ) initialBounds.MinZ = p.Z;
+                                            if (p.Z > initialBounds.MaxZ) initialBounds.MaxZ = p.Z;
                                         }
                                     }
-                                    avgDistance = EstimateAverageSpacing(masterPoints.Count, minX, maxX, minZ, maxZ, hasBounds);
+                                    avgDistance = PointAnalysis.EstimateSpacingFromDensity(masterPoints.Count, in initialBounds);
                                 }
                             }
                         }
@@ -351,36 +437,11 @@ namespace MeshTool.Core.IO
             }
         }
 
-        private static void ScanBoundsXZ(List<Vertex> points, out double minX, out double maxX, out double minZ, out double maxZ, out bool hasBounds)
-        {
-            minX = double.MaxValue;
-            maxX = double.MinValue;
-            minZ = double.MaxValue;
-            maxZ = double.MinValue;
-            hasBounds = false;
-
-            foreach (var p in points)
-            {
-                hasBounds = true;
-                if (p.Position.X < minX) minX = p.Position.X;
-                if (p.Position.X > maxX) maxX = p.Position.X;
-                if (p.Position.Z < minZ) minZ = p.Position.Z;
-                if (p.Position.Z > maxZ) maxZ = p.Position.Z;
-            }
-        }
-
-        private static float EstimateAverageSpacing(int pointCount, double minX, double maxX, double minZ, double maxZ, bool hasBounds)
-        {
-            if (pointCount < 2 || !hasBounds) return 1.0f;
-
-            double dx = Math.Max(1e-3, maxX - minX);
-            double dz = Math.Max(1e-3, maxZ - minZ);
-            double area = dx * dz;
-            double spacing = Math.Sqrt(area / Math.Max(1, pointCount));
-
-            return (float)Math.Clamp(spacing, 0.02, 500.0);
-        }
-
+        /// <summary>
+        /// Counts the exact number of lines in a file.
+        /// </summary>
+        /// <param name="path">Path to the file.</param>
+        /// <returns>The number of lines, or 0 if the file doesn't exist or cannot be read.</returns>
         private static long CountFileLinesExact(string path)
         {
             try
@@ -407,16 +468,36 @@ namespace MeshTool.Core.IO
                 if (sawAnyByte && lastByte != (byte)'\n') lines++;
                 return lines;
             }
-            catch
+            catch (IOException)
+            {
+                return 0;
+            }
+            catch (UnauthorizedAccessException)
             {
                 return 0;
             }
         }
 
+        /// <summary>
+        /// Atomically saves the database to disk.
+        /// </summary>
+        /// <param name="points">Points to save.</param>
+        /// <param name="rays">Rays to save.</param>
+        /// <param name="path">Destination path.</param>
         private static void SaveDatabaseAtomic(IReadOnlyList<Vertex> points, IReadOnlyList<Ray> rays, string path)
         {
             string tmp = path + ".tmp";
-            DatabaseIO.SaveDatabase(points, rays, tmp);
+
+            try
+            {
+                DatabaseIO.SaveDatabase(points, rays, tmp);
+            }
+            catch (Exception)
+            {
+                // Clean up temp file if save failed
+                try { File.Delete(tmp); } catch { }
+                throw;
+            }
 
             try
             {
@@ -430,7 +511,7 @@ namespace MeshTool.Core.IO
                     File.Move(tmp, path);
                 }
             }
-            catch
+            catch (IOException)
             {
                 // Fallback: best-effort move
                 try
@@ -438,7 +519,20 @@ namespace MeshTool.Core.IO
                     if (File.Exists(path)) File.Delete(path);
                     File.Move(tmp, path);
                 }
-                catch
+                catch (IOException)
+                {
+                    // give up - data is in temp file at least
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Fallback: best-effort move
+                try
+                {
+                    if (File.Exists(path)) File.Delete(path);
+                    File.Move(tmp, path);
+                }
+                catch (IOException)
                 {
                     // give up
                 }

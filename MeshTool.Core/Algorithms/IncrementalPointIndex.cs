@@ -1,9 +1,13 @@
 using System;
 using System.Collections.Generic;
 using MeshTool.Core.Data;
+using MeshTool.Core.Config;
 
 namespace MeshTool.Core.Algorithms
 {
+    /// <summary>
+    /// Incremental spatial index for deduplicating points during streaming ingestion.
+    /// </summary>
     public sealed class IncrementalPointIndex
     {
         private readonly Dictionary<long, List<Vertex>> _grid = new Dictionary<long, List<Vertex>>();
@@ -11,11 +15,17 @@ namespace MeshTool.Core.Algorithms
         private readonly double _minSq;
         private readonly bool _refreshExistingSpawnTime;
 
+        /// <summary>
+        /// Initializes a new incremental point index.
+        /// </summary>
+        /// <param name="existingPoints">Points to pre-populate the index.</param>
+        /// <param name="minDistance">Minimum distance for duplicate detection.</param>
+        /// <param name="refreshExistingSpawnTime">Whether to update spawn times of existing points.</param>
         public IncrementalPointIndex(IEnumerable<Vertex> existingPoints, double minDistance, bool refreshExistingSpawnTime = true)
         {
             if (minDistance <= 0) throw new ArgumentOutOfRangeException(nameof(minDistance));
 
-            _cellSize = minDistance * 4;
+            _cellSize = minDistance * SpatialIndexing.CellSizeMultiplier;
             _minSq = minDistance * minDistance;
             _refreshExistingSpawnTime = refreshExistingSpawnTime;
 
@@ -23,6 +33,10 @@ namespace MeshTool.Core.Algorithms
                 AddToGrid(p);
         }
 
+        /// <summary>
+        /// Attempts to add multiple candidates to the master list.
+        /// </summary>
+        /// <returns>The number of points actually added.</returns>
         public int AddRange(List<Vertex> master, List<Vertex> candidates)
         {
             int added = 0;
@@ -34,11 +48,14 @@ namespace MeshTool.Core.Algorithms
             return added;
         }
 
+        /// <summary>
+        /// Attempts to add a single candidate to the master list.
+        /// </summary>
+        /// <returns>True if the point was added, false if it was a duplicate.</returns>
         public bool TryAdd(List<Vertex> master, Vertex candidate)
         {
             if (IsTooClose(candidate, out var existing))
             {
-                // Update spawn time of existing point to keep it "fresh"
                 if (_refreshExistingSpawnTime && existing != null && candidate.SpawnTime > existing.SpawnTime)
                 {
                     existing.SpawnTime = candidate.SpawnTime;
@@ -106,7 +123,7 @@ namespace MeshTool.Core.Algorithms
 
         private static long HashCell(int gx, int gy, int gz)
         {
-            return ((long)gx * 73856093) ^ ((long)gy * 19349663) ^ ((long)gz * 83492791);
+            return ((long)gx * SpatialIndexing.HashPrimeX) ^ ((long)gy * SpatialIndexing.HashPrimeY) ^ ((long)gz * SpatialIndexing.HashPrimeZ);
         }
     }
 }
