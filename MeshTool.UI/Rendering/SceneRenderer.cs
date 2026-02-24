@@ -2121,12 +2121,10 @@ namespace MeshTool.UI.Rendering
                     _gl.UseProgram(_shaderProgramFlatAccum);
                     SetUniforms(_shaderProgramFlatAccum, view, proj);
                     int colorLocAccum = _gl.GetUniformLocation(_shaderProgramFlatAccum, "uColor");
-                    _gl.Uniform4(colorLocAccum, 0.88f, 0.42f, 1.0f, 0.16f);
-                    _gl.Enable(EnableCap.CullFace);
-                    _gl.CullFace(TriangleFace.Back);
+                    _gl.Uniform4(colorLocAccum, 0.88f, 0.42f, 1.0f, 0.22f);
+                    _gl.Disable(EnableCap.CullFace);
                     _gl.BindVertexArray(_vaoSelectionFill);
                     _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_selectionFillVertexCount);
-                    _gl.Disable(EnableCap.CullFace);
                 }
 
                 if (hasScanHandlePlanes)
@@ -2175,12 +2173,10 @@ namespace MeshTool.UI.Rendering
                     _gl.UseProgram(_shaderProgramFlatReveal);
                     SetUniforms(_shaderProgramFlatReveal, view, proj);
                     int colorLocReveal = _gl.GetUniformLocation(_shaderProgramFlatReveal, "uColor");
-                    _gl.Uniform4(colorLocReveal, 0.88f, 0.42f, 1.0f, 0.16f);
-                    _gl.Enable(EnableCap.CullFace);
-                    _gl.CullFace(TriangleFace.Back);
+                    _gl.Uniform4(colorLocReveal, 0.88f, 0.42f, 1.0f, 0.22f);
+                    _gl.Disable(EnableCap.CullFace);
                     _gl.BindVertexArray(_vaoSelectionFill);
                     _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_selectionFillVertexCount);
-                    _gl.Disable(EnableCap.CullFace);
                 }
 
                 if (hasScanHandlePlanes)
