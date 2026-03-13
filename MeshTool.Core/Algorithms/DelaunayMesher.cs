@@ -47,7 +47,7 @@ namespace MeshTool.Core.Algorithms
             System.Threading.Tasks.Task? progressTask = null;
             foreach (var p in points)
             {
-                if (++count % 10000 == 0) Logger.Debug(".");
+                if (++count % 10000 == 0) Logger.WriteProgressDot();
 
                 // Step A: Locate the triangle containing point p (or close to it)
                 Triangle? startNode = FindTriangleContainingPoint(lastTri, p.Position);

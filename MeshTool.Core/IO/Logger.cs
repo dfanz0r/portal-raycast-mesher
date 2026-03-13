@@ -153,6 +153,24 @@ namespace MeshTool.Core.IO
         public static void Debug(string message) => Log(LogLevel.Debug, message);
 
         /// <summary>
+        /// Writes a progress dot to the console without any formatting.
+        /// Used for CLI-style progress indicators during long operations.
+        /// Does not log to file or raise events.
+        /// </summary>
+        public static void WriteProgressDot()
+        {
+            try
+            {
+                Console.Write(".");
+                Console.Out.Flush();
+            }
+            catch
+            {
+                // Console may not be available in some contexts
+            }
+        }
+
+        /// <summary>
         /// Logs an info message.
         /// </summary>
         public static void Info(string message) => Log(LogLevel.Info, message);
