@@ -47,23 +47,7 @@ namespace MeshTool.UI.Rendering
 
         private int _surfelVertexCount;
 
-        private uint _msaaFbo;
-        private uint _msaaAccumFbo;
-        private uint _msaaRevealFbo;
-        private uint _msaaColor;
-        private uint _msaaAccum;
-        private uint _msaaReveal;
-        private uint _msaaDepth;
-        private uint _resolveFbo;
-        private uint _resolveColor;
-        private uint _resolveDepth;
-        private uint _oitAccumResolveFbo;
-        private uint _oitRevealResolveFbo;
-        private uint _oitAccumColor;
-        private uint _oitRevealColor;
-        private int _msaaWidth;
-        private int _msaaHeight;
-        private int _msaaSamples = 4;
+        private OitFramebufferManager? _framebufferManager;
         private float _latestSpawnTime = 0f;
 
         public Vector3D<float>? HoveredCoordinate { get; set; }
@@ -121,24 +105,7 @@ namespace MeshTool.UI.Rendering
                 }
             }
 
-            try
-            {
-                int maxSamples = _gl.GetInteger(GLEnum.MaxSamples);
-                _msaaSamples = Math.Min(4, maxSamples);
-                if (_msaaSamples > 1)
-                {
-                    _gl.Enable(EnableCap.Multisample);
-                    _viewport.OnLog?.Invoke($"[GL] MSAA Enabled with {_msaaSamples} samples.");
-                }
-                else
-                {
-                    _viewport.OnLog?.Invoke($"[GL] MSAA not supported (MaxSamples = {maxSamples}).");
-                }
-            }
-            catch (Exception ex)
-            {
-                _viewport.OnLog?.Invoke($"[GL] MSAA check failed: {ex.Message}");
-            }
+            _framebufferManager = new OitFramebufferManager(_gl, 4, _viewport.OnLog);
 
             InitShaders();
             InitBuffers();
@@ -935,21 +902,7 @@ namespace MeshTool.UI.Rendering
 
         public void Deinit()
         {
-            if (_msaaFbo != 0) _gl.DeleteFramebuffer(_msaaFbo);
-            if (_msaaAccumFbo != 0) _gl.DeleteFramebuffer(_msaaAccumFbo);
-            if (_msaaRevealFbo != 0) _gl.DeleteFramebuffer(_msaaRevealFbo);
-            if (_msaaColor != 0) _gl.DeleteRenderbuffer(_msaaColor);
-            if (_msaaAccum != 0) _gl.DeleteRenderbuffer(_msaaAccum);
-            if (_msaaReveal != 0) _gl.DeleteRenderbuffer(_msaaReveal);
-            if (_msaaDepth != 0) _gl.DeleteRenderbuffer(_msaaDepth);
-
-            if (_resolveFbo != 0) _gl.DeleteFramebuffer(_resolveFbo);
-            if (_resolveColor != 0) _gl.DeleteTexture(_resolveColor);
-            if (_resolveDepth != 0) _gl.DeleteTexture(_resolveDepth);
-            if (_oitAccumResolveFbo != 0) _gl.DeleteFramebuffer(_oitAccumResolveFbo);
-            if (_oitRevealResolveFbo != 0) _gl.DeleteFramebuffer(_oitRevealResolveFbo);
-            if (_oitAccumColor != 0) _gl.DeleteTexture(_oitAccumColor);
-            if (_oitRevealColor != 0) _gl.DeleteTexture(_oitRevealColor);
+            _framebufferManager?.Dispose();
 
             _gl.DeleteVertexArray(_vaoPoints);
             _gl.DeleteVertexArray(_vaoSurfels);
@@ -1224,7 +1177,7 @@ namespace MeshTool.UI.Rendering
                 else if (_meshRawDirty)
                 {
                     _meshRawDirty = false;
-                    
+
                     if (_pendingMeshRawBuffer != null)
                     {
                         _meshVertexCount = _pendingMeshRawVertexCount;
@@ -1435,28 +1388,29 @@ namespace MeshTool.UI.Rendering
                     {
                         for (int i = 0; i < addedPoints; i++)
                         {
-                        float nx = (float)newPoints![i].Normal.X;
-                        float ny = (float)newPoints[i].Normal.Y;
-                        float nz = (float)newPoints[i].Normal.Z;
-                        float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
-                        if (nLen > 0.00001f)
-                        {
-                            nx /= nLen;
-                            ny /= nLen;
-                            nz /= nLen;
-                        }
-                        else
-                        {
-                            nx = 0f;
-                            ny = 1f;
-                            nz = 0f;
-                        }
+                            float nx = (float)newPoints![i].Normal.X;
+                            float ny = (float)newPoints[i].Normal.Y;
+                            float nz = (float)newPoints[i].Normal.Z;
+                            float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
+                            if (nLen > 0.00001f)
+                            {
+                                nx /= nLen;
+                                ny /= nLen;
+                                nz /= nLen;
+                            }
+                            else
+                            {
+                                nx = 0f;
+                                ny = 1f;
+                                nz = 0f;
+                            }
 
                             int pointIndex = _pointCount + i;
                             vertices[i * 8 + 0] = (float)newPoints[i].Position.X;
                             vertices[i * 8 + 1] = (float)newPoints[i].Position.Y;
                             vertices[i * 8 + 2] = (float)newPoints[i].Position.Z;
                             vertices[i * 8 + 3] = nx;
+                            vertices[i * 8 + 4] = ny;
                             vertices[i * 8 + 5] = nz;
                             vertices[i * 8 + 6] = newPoints[i].SpawnTime;
                             vertices[i * 8 + 7] = _selectedPointIndices.Contains(pointIndex) ? 1f : 0f;
@@ -1698,40 +1652,40 @@ namespace MeshTool.UI.Rendering
                             for (int i = 0; i < pendingMesh.Count; i++)
                             {
                                 var t = pendingMesh[i];
-                            var edge1 = t.B.Position - t.A.Position;
-                            var edge2 = t.C.Position - t.A.Position;
-                            var n = edge1.Cross(edge2);
-                            double len = Math.Sqrt(n.X * n.X + n.Y * n.Y + n.Z * n.Z);
-                            if (len > 1e-7)
-                            {
-                                n.X /= len;
-                                n.Y /= len;
-                                n.Z /= len;
-                            }
-                            else
-                            {
-                                n = new MeshTool.Core.Data.Vector3(0, 1, 0);
-                            }
+                                var edge1 = t.B.Position - t.A.Position;
+                                var edge2 = t.C.Position - t.A.Position;
+                                var n = edge1.Cross(edge2);
+                                double len = Math.Sqrt(n.X * n.X + n.Y * n.Y + n.Z * n.Z);
+                                if (len > 1e-7)
+                                {
+                                    n.X /= len;
+                                    n.Y /= len;
+                                    n.Z /= len;
+                                }
+                                else
+                                {
+                                    n = new MeshTool.Core.Data.Vector3(0, 1, 0);
+                                }
 
-                            meshData[i * 18 + 0] = (float)t.A.Position.X;
-                            meshData[i * 18 + 1] = (float)t.A.Position.Y;
-                            meshData[i * 18 + 2] = (float)t.A.Position.Z;
-                            meshData[i * 18 + 3] = (float)n.X;
-                            meshData[i * 18 + 4] = (float)n.Y;
-                            meshData[i * 18 + 5] = (float)n.Z;
+                                meshData[i * 18 + 0] = (float)t.A.Position.X;
+                                meshData[i * 18 + 1] = (float)t.A.Position.Y;
+                                meshData[i * 18 + 2] = (float)t.A.Position.Z;
+                                meshData[i * 18 + 3] = (float)n.X;
+                                meshData[i * 18 + 4] = (float)n.Y;
+                                meshData[i * 18 + 5] = (float)n.Z;
 
-                            meshData[i * 18 + 6] = (float)t.B.Position.X;
-                            meshData[i * 18 + 7] = (float)t.B.Position.Y;
-                            meshData[i * 18 + 8] = (float)t.B.Position.Z;
-                            meshData[i * 18 + 9] = (float)n.X;
-                            meshData[i * 18 + 10] = (float)n.Y;
-                            meshData[i * 18 + 11] = (float)n.Z;
+                                meshData[i * 18 + 6] = (float)t.B.Position.X;
+                                meshData[i * 18 + 7] = (float)t.B.Position.Y;
+                                meshData[i * 18 + 8] = (float)t.B.Position.Z;
+                                meshData[i * 18 + 9] = (float)n.X;
+                                meshData[i * 18 + 10] = (float)n.Y;
+                                meshData[i * 18 + 11] = (float)n.Z;
 
-                            meshData[i * 18 + 12] = (float)t.C.Position.X;
-                            meshData[i * 18 + 13] = (float)t.C.Position.Y;
-                            meshData[i * 18 + 14] = (float)t.C.Position.Z;
-                            meshData[i * 18 + 15] = (float)n.X;
-                            meshData[i * 18 + 16] = (float)n.Y;
+                                meshData[i * 18 + 12] = (float)t.C.Position.X;
+                                meshData[i * 18 + 13] = (float)t.C.Position.Y;
+                                meshData[i * 18 + 14] = (float)t.C.Position.Z;
+                                meshData[i * 18 + 15] = (float)n.X;
+                                meshData[i * 18 + 16] = (float)n.Y;
                                 meshData[i * 18 + 17] = (float)n.Z;
                             }
 
@@ -1761,127 +1715,9 @@ namespace MeshTool.UI.Rendering
             int width = (int)bounds.Width;
             int height = (int)bounds.Height;
 
-            if (width != _msaaWidth || height != _msaaHeight)
-            {
-                if (_msaaFbo != 0) _gl.DeleteFramebuffer(_msaaFbo);
-                if (_msaaAccumFbo != 0) _gl.DeleteFramebuffer(_msaaAccumFbo);
-                if (_msaaRevealFbo != 0) _gl.DeleteFramebuffer(_msaaRevealFbo);
-                if (_msaaColor != 0) _gl.DeleteRenderbuffer(_msaaColor);
-                if (_msaaAccum != 0) _gl.DeleteRenderbuffer(_msaaAccum);
-                if (_msaaReveal != 0) _gl.DeleteRenderbuffer(_msaaReveal);
-                if (_msaaDepth != 0) _gl.DeleteRenderbuffer(_msaaDepth);
+            _framebufferManager?.EnsureSize(width, height);
 
-                if (_resolveFbo != 0) _gl.DeleteFramebuffer(_resolveFbo);
-                if (_resolveColor != 0) _gl.DeleteTexture(_resolveColor);
-                if (_resolveDepth != 0) _gl.DeleteTexture(_resolveDepth);
-                if (_oitAccumResolveFbo != 0) _gl.DeleteFramebuffer(_oitAccumResolveFbo);
-                if (_oitRevealResolveFbo != 0) _gl.DeleteFramebuffer(_oitRevealResolveFbo);
-                if (_oitAccumColor != 0) _gl.DeleteTexture(_oitAccumColor);
-                if (_oitRevealColor != 0) _gl.DeleteTexture(_oitRevealColor);
-
-                _msaaWidth = width;
-                _msaaHeight = height;
-
-                // 1. MSAA FBO (Renderbuffers)
-                _msaaFbo = _gl.GenFramebuffer();
-                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaFbo);
-
-                _msaaColor = _gl.GenRenderbuffer();
-                _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _msaaColor);
-                _gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)_msaaSamples, InternalFormat.Rgba8, (uint)width, (uint)height);
-                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, _msaaColor);
-
-                _msaaAccum = _gl.GenRenderbuffer();
-                _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _msaaAccum);
-                _gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)_msaaSamples, InternalFormat.Rgba16f, (uint)width, (uint)height);
-                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment1, RenderbufferTarget.Renderbuffer, _msaaAccum);
-
-                _msaaReveal = _gl.GenRenderbuffer();
-                _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _msaaReveal);
-                _gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)_msaaSamples, InternalFormat.Rgba8, (uint)width, (uint)height);
-                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment2, RenderbufferTarget.Renderbuffer, _msaaReveal);
-
-                _msaaDepth = _gl.GenRenderbuffer();
-                _gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _msaaDepth);
-                _gl.RenderbufferStorageMultisample(RenderbufferTarget.Renderbuffer, (uint)_msaaSamples, InternalFormat.DepthComponent32f, (uint)width, (uint)height);
-                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, _msaaDepth);
-
-                var status1 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
-                if (status1 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] MSAA FBO incomplete: {status1}");
-
-                // 2. Resolve FBO (Textures)
-                _resolveFbo = _gl.GenFramebuffer();
-                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _resolveFbo);
-
-                _resolveColor = _gl.GenTexture();
-                _gl.BindTexture(TextureTarget.Texture2D, _resolveColor);
-                _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)width, (uint)height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, null);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
-                _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _resolveColor, 0);
-
-                _resolveDepth = _gl.GenTexture();
-                _gl.BindTexture(TextureTarget.Texture2D, _resolveDepth);
-                _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.DepthComponent32f, (uint)width, (uint)height, 0, PixelFormat.DepthComponent, PixelType.Float, null);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
-                _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, _resolveDepth, 0);
-
-                var status2 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
-                if (status2 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] Resolve FBO incomplete: {status2}");
-
-                // 3. OIT resolve textures/FBOs (single sample)
-                _oitAccumResolveFbo = _gl.GenFramebuffer();
-                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _oitAccumResolveFbo);
-
-                _oitAccumColor = _gl.GenTexture();
-                _gl.BindTexture(TextureTarget.Texture2D, _oitAccumColor);
-                _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba16f, (uint)width, (uint)height, 0, PixelFormat.Rgba, PixelType.HalfFloat, null);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
-                _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _oitAccumColor, 0);
-
-                var status3 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
-                if (status3 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] OIT Accum Resolve FBO incomplete: {status3}");
-
-                _oitRevealResolveFbo = _gl.GenFramebuffer();
-                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _oitRevealResolveFbo);
-
-                _oitRevealColor = _gl.GenTexture();
-                _gl.BindTexture(TextureTarget.Texture2D, _oitRevealColor);
-                _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)width, (uint)height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, null);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
-                _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, _oitRevealColor, 0);
-
-                var status4 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
-                if (status4 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] OIT Reveal Resolve FBO incomplete: {status4}");
-
-                // 4. MSAA OIT FBOs (single color attachment each, shared depth)
-                _msaaAccumFbo = _gl.GenFramebuffer();
-                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaAccumFbo);
-                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, _msaaAccum);
-                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, _msaaDepth);
-                var status5 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
-                if (status5 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] MSAA Accum FBO incomplete: {status5}");
-
-                _msaaRevealFbo = _gl.GenFramebuffer();
-                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaRevealFbo);
-                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, RenderbufferTarget.Renderbuffer, _msaaReveal);
-                _gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, _msaaDepth);
-                var status6 = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
-                if (status6 != GLEnum.FramebufferComplete) _viewport.OnLog?.Invoke($"[GL ERROR] MSAA Reveal FBO incomplete: {status6}");
-            }
-
-            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaFbo);
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _framebufferManager!.MsaaFbo);
             _gl.Viewport(0, 0, (uint)width, (uint)height);
             _gl.ClearColor(0.15f, 0.15f, 0.15f, 1.0f);
             if (_glClearDepthf != null) _glClearDepthf(0.0f);
@@ -1893,7 +1729,7 @@ namespace MeshTool.UI.Rendering
             bool hasAnyGeometry = _pointCount > 0 || _rayCount > 0 || _meshVertexCount > 0 || _showSelectionBox || _selectionAreas.Length > 0;
             if (!hasAnyGeometry && !_viewport.ShowGrid)
             {
-                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaFbo);
+                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _framebufferManager.MsaaFbo);
                 _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, (uint)fb);
                 _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
                 return;
@@ -2085,7 +1921,7 @@ namespace MeshTool.UI.Rendering
                 _gl.Enable(EnableCap.Blend);
 
                 // OIT pass A (accumulation) in dedicated MSAA FBO
-                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaAccumFbo);
+                _framebufferManager.BindMsaaAccumFramebuffer();
                 _gl.ClearColor(0f, 0f, 0f, 0f);
                 _gl.Clear((uint)ClearBufferMask.ColorBufferBit);
                 _gl.BlendFunc(BlendingFactor.One, BlendingFactor.One);
@@ -2137,7 +1973,7 @@ namespace MeshTool.UI.Rendering
                 }
 
                 // OIT pass B (revealage) in dedicated MSAA FBO
-                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _msaaRevealFbo);
+                _framebufferManager.BindMsaaRevealFramebuffer();
                 _gl.ClearColor(1f, 1f, 1f, 1f);
                 _gl.Clear((uint)ClearBufferMask.ColorBufferBit);
                 _gl.BlendFunc(BlendingFactor.Zero, BlendingFactor.OneMinusSrcAlpha);
@@ -2192,19 +2028,13 @@ namespace MeshTool.UI.Rendering
                 _gl.DepthMask(true);
 
                 // Resolve MSAA OIT attachments to single-sample OIT textures.
-                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaAccumFbo);
-                _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _oitAccumResolveFbo);
-                _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
-
-                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaRevealFbo);
-                _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _oitRevealResolveFbo);
-                _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+                _framebufferManager.ResolveBuffers();
             }
-
-            // Resolve MSAA opaque color/depth to resolve textures
-            _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _msaaFbo);
-            _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _resolveFbo);
-            _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
+            else
+            {
+                // Resolve MSAA opaque color/depth to resolve textures
+                _framebufferManager.ResolveBuffers();
+            }
 
             if (hasWboit)
             {
@@ -2216,15 +2046,15 @@ namespace MeshTool.UI.Rendering
 
                 _gl.UseProgram(_shaderProgramComposite);
                 _gl.ActiveTexture(TextureUnit.Texture0);
-                _gl.BindTexture(TextureTarget.Texture2D, _resolveColor);
+                _gl.BindTexture(TextureTarget.Texture2D, _framebufferManager.ResolveColorTexture);
                 _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite, "uOpaqueColor"), 0);
 
                 _gl.ActiveTexture(TextureUnit.Texture1);
-                _gl.BindTexture(TextureTarget.Texture2D, _oitAccumColor);
+                _gl.BindTexture(TextureTarget.Texture2D, _framebufferManager.OitAccumTexture);
                 _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite, "uAccumColor"), 1);
 
                 _gl.ActiveTexture(TextureUnit.Texture2);
-                _gl.BindTexture(TextureTarget.Texture2D, _oitRevealColor);
+                _gl.BindTexture(TextureTarget.Texture2D, _framebufferManager.OitRevealTexture);
                 _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite, "uRevealColor"), 2);
 
                 _gl.BindVertexArray(_vaoGrid);
@@ -2241,16 +2071,14 @@ namespace MeshTool.UI.Rendering
             else
             {
                 // Blit Resolve FBO to Default FBO.
-                _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _resolveFbo);
-                _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, (uint)fb);
-                _gl.BlitFramebuffer(0, 0, width, height, 0, 0, width, height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+                _framebufferManager.BlitToFramebuffer((uint)fb);
             }
         }
 
         private unsafe void UpdateScanVolumeBuffer()
         {
             var s = _scanVolume.Sanitize();
-            float[] data = BuildScanVolumeLineVertices(
+            float[] data = ScanVolumeGeometryBuilder.BuildScanVolumeLineVertices(
                 s,
                 _hoverScanHandle,
                 _activeScanHandle,
@@ -2327,7 +2155,7 @@ namespace MeshTool.UI.Rendering
         private unsafe void UpdateScanHandleBuffer()
         {
             var s = _scanVolume.Sanitize();
-            float[] data = BuildScanHandleSolidVertices(s, _hoverScanHandle, _activeScanHandle, _viewport.Camera.Position);
+            float[] data = ScanVolumeGeometryBuilder.BuildScanHandleSolidVertices(s, _hoverScanHandle, _activeScanHandle, _viewport.Camera.Position);
             _scanHandleVertexCount = data.Length / 10;
 
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboScanHandles);
@@ -2345,7 +2173,7 @@ namespace MeshTool.UI.Rendering
                 return;
             }
 
-            var density = BuildScanDensityVertices(s);
+            var density = ScanVolumeGeometryBuilder.BuildScanDensityVertices(s, GridPlaneY, ScanFineTargetStep, _viewport.Camera.Position, ref _fineDensityPreviewRadius);
             float[] data = density.Vertices;
             _scanDensityVertexCount = data.Length / 6;
             _scanDensityBroadCount = density.BroadCount;
@@ -2389,516 +2217,6 @@ namespace MeshTool.UI.Rendering
             float dx = cam.X - _lastDensityCameraPos.X;
             float dz = cam.Z - _lastDensityCameraPos.Z;
             return (dx * dx) + (dz * dz) >= (ScanDensityRebuildMoveThreshold * ScanDensityRebuildMoveThreshold);
-        }
-
-        private (float[] Vertices, int BroadCount) BuildScanDensityVertices(ScanVolumeSettings s)
-        {
-            float hx = s.SizeX * 0.5f;
-            float hz = s.SizeZ * 0.5f;
-            float broadCell = MathF.Max(8f, s.ProbeCellSize);
-            float fineCell = MathF.Max(8f, ScanFineTargetStep);
-            float yaw = s.YawDegrees * (MathF.PI / 180f);
-            var xAxis = Vector3D.Normalize(new Vector3D<float>(MathF.Cos(yaw), 0f, MathF.Sin(yaw)));
-            var zAxis = Vector3D.Normalize(new Vector3D<float>(-MathF.Sin(yaw), 0f, MathF.Cos(yaw)));
-
-            float y = GridPlaneY + 2f;
-
-            int countX = Math.Max(1, (int)MathF.Floor((s.SizeX - broadCell) / broadCell) + 1);
-            int countZ = Math.Max(1, (int)MathF.Floor((s.SizeZ - broadCell) / broadCell) + 1);
-            int fineCountX = Math.Max(1, (int)MathF.Floor((s.SizeX - fineCell) / fineCell) + 1);
-            int fineCountZ = Math.Max(1, (int)MathF.Floor((s.SizeZ - fineCell) / fineCell) + 1);
-
-            float broadMinX = -hx + broadCell * 0.5f;
-            float broadMinZ = -hz + broadCell * 0.5f;
-            var verts = new System.Collections.Generic.List<float>((countX * countZ + fineCountX * fineCountZ) * 6);
-            var camPos = _viewport.Camera.Position;
-            float fineRadiusSq = _fineDensityPreviewRadius * _fineDensityPreviewRadius;
-
-            // Broad phase points (larger, brighter green)
-            for (int ix = 0; ix < countX; ix++)
-            {
-                float lx = broadMinX + ix * broadCell;
-                for (int iz = 0; iz < countZ; iz++)
-                {
-                    float lz = broadMinZ + iz * broadCell;
-                    var p = new Vector3D<float>(s.CenterX, y, s.CenterZ) + xAxis * lx + zAxis * lz;
-                    verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
-                    verts.Add(0.2f); verts.Add(0.95f); verts.Add(0.45f);
-                }
-            }
-            int broadCount = verts.Count / 6;
-
-            // Fine phase points (smaller spacing; camera-radius culled)
-            float fineMinX = -hx + fineCell * 0.5f;
-            float fineMinZ = -hz + fineCell * 0.5f;
-            float camDx = camPos.X - s.CenterX;
-            float camDz = camPos.Z - s.CenterZ;
-            float camLocalX = (camDx * xAxis.X) + (camDz * xAxis.Z);
-            float camLocalZ = (camDx * zAxis.X) + (camDz * zAxis.Z);
-            float radius = _fineDensityPreviewRadius;
-
-            int ixMin = Math.Max(0, (int)MathF.Ceiling(((camLocalX - radius) - fineMinX) / fineCell));
-            int ixMax = Math.Min(fineCountX - 1, (int)MathF.Floor(((camLocalX + radius) - fineMinX) / fineCell));
-            int izMin = Math.Max(0, (int)MathF.Ceiling(((camLocalZ - radius) - fineMinZ) / fineCell));
-            int izMax = Math.Min(fineCountZ - 1, (int)MathF.Floor(((camLocalZ + radius) - fineMinZ) / fineCell));
-
-            int renderedFineCount = 0;
-            for (int ix = ixMin; ix <= ixMax; ix++)
-            {
-                float lx = fineMinX + ix * fineCell;
-                for (int iz = izMin; iz <= izMax; iz++)
-                {
-                    float lz = fineMinZ + iz * fineCell;
-                    var p = new Vector3D<float>(s.CenterX, y + 0.5f, s.CenterZ) + xAxis * lx + zAxis * lz;
-                    float dx = p.X - camPos.X;
-                    float dz = p.Z - camPos.Z;
-                    if ((dx * dx) + (dz * dz) > fineRadiusSq)
-                    {
-                        continue;
-                    }
-                    verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
-                    verts.Add(0.1f); verts.Add(0.65f); verts.Add(1.0f);
-                    renderedFineCount++;
-                }
-            }
-
-            float minRadius = Math.Max(700f, fineCell * 6f);
-            float maxRadius = Math.Max(4200f, MathF.Sqrt((s.SizeX * s.SizeX) + (s.SizeZ * s.SizeZ)) * 1.25f);
-            float sampleCount = Math.Max(1f, renderedFineCount);
-            float ratio = FineDensityPreviewTargetPoints / sampleCount;
-            float factor = Math.Clamp(MathF.Sqrt(ratio), 0.7f, 1.35f);
-            float desiredRadius = Math.Clamp(_fineDensityPreviewRadius * factor, minRadius, maxRadius);
-            _fineDensityPreviewRadius += (desiredRadius - _fineDensityPreviewRadius) * FineDensityPreviewAdjustRate;
-
-            return (verts.ToArray(), broadCount);
-        }
-
-        private static float[] BuildScanHandleSolidVertices(ScanVolumeSettings s, int hoverHandle, int activeHandle, Vector3D<float> camPos)
-        {
-            float hx = s.SizeX * 0.5f;
-            float hz = s.SizeZ * 0.5f;
-            float yaw = s.YawDegrees * (MathF.PI / 180f);
-            var xAxis = Vector3D.Normalize(new Vector3D<float>(MathF.Cos(yaw), 0f, MathF.Sin(yaw)));
-            var zAxis = Vector3D.Normalize(new Vector3D<float>(-MathF.Sin(yaw), 0f, MathF.Cos(yaw)));
-            float midY = (s.YTop + s.YBottom) * 0.5f;
-            var centerMid = new Vector3D<float>(s.CenterX, midY, s.CenterZ);
-            float moveOffset = MathF.Max(20f, MathF.Min(hx, hz) * 0.35f);
-            float rotateRadius = Math.Clamp(MathF.Min(hx, hz) * 0.25f, 30f, 600f);
-            float rotateHandleOffset = hx + MathF.Max(40f, MathF.Min(hx, hz) * 0.35f);
-
-            var hXPos = centerMid + xAxis * hx;
-            var hXNeg = centerMid - xAxis * hx;
-            var hZPos = centerMid + zAxis * hz;
-            var hZNeg = centerMid - zAxis * hz;
-            var hTop = new Vector3D<float>(s.CenterX, s.YTop, s.CenterZ);
-            var hBottom = new Vector3D<float>(s.CenterX, s.YBottom, s.CenterZ);
-            var hRotate = centerMid + xAxis * rotateHandleOffset;
-            var hMoveX = centerMid + xAxis * moveOffset;
-            var hMoveZ = centerMid + zAxis * moveOffset;
-
-            // Compute a base size that scales with camera distance to maintain visual consistency
-            float distToCamera = (centerMid - camPos).Length;
-            float baseSize = Math.Clamp(distToCamera * 0.02f, 0.5f, 400f);
-            
-            const float redR = 0.965f;
-            const float redG = 0.24f;
-            const float redB = 0.24f;
-            var verts = new System.Collections.Generic.List<float>(2048);
-
-            (float R, float G, float B, float Scale) StyleFor(int handleId, float r, float g, float b)
-            {
-                if (activeHandle == handleId) return (1.0f, 0.95f, 0.25f, 1.45f);
-                if (hoverHandle == handleId) return (1.0f, 1.0f, 1.0f, 1.25f);
-                return (r, g, b, 1.0f);
-            }
-
-            void AddTri(Vector3D<float> a, Vector3D<float> b, Vector3D<float> c, float r, float g, float bl, float alpha = 1.0f)
-            {
-                var n = Vector3D.Normalize(Vector3D.Cross(b - a, c - a));
-                void Emit(Vector3D<float> p)
-                {
-                    verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
-                    verts.Add(n.X); verts.Add(n.Y); verts.Add(n.Z);
-                    verts.Add(r); verts.Add(g); verts.Add(bl);
-                    verts.Add(alpha);
-                }
-                Emit(a); Emit(b); Emit(c);
-            }
-
-            void AddTriWithNormal(Vector3D<float> a, Vector3D<float> b, Vector3D<float> c, Vector3D<float> n, float r, float g, float bl, float alpha = 1.0f)
-            {
-                n = Vector3D.Normalize(n);
-                void Emit(Vector3D<float> p)
-                {
-                    verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
-                    verts.Add(n.X); verts.Add(n.Y); verts.Add(n.Z);
-                    verts.Add(r); verts.Add(g); verts.Add(bl);
-                    verts.Add(alpha);
-                }
-                Emit(a); Emit(b); Emit(c);
-            }
-
-            void AddCone(Vector3D<float> baseCenter, Vector3D<float> dir, float length, float radius, float r, float g, float bl)
-            {
-                var d = Vector3D.Normalize(dir);
-                var tip = baseCenter + d * length;
-                Vector3D<float> refAxis = MathF.Abs(d.Y) > 0.8f ? new Vector3D<float>(1, 0, 0) : new Vector3D<float>(0, 1, 0);
-                var u = Vector3D.Normalize(Vector3D.Cross(d, refAxis));
-                var v = Vector3D.Normalize(Vector3D.Cross(u, d));
-                const int segments = 14;
-
-                void EmitVertex(Vector3D<float> p, Vector3D<float> n, float cr, float cg, float cb)
-                {
-                    verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
-                    verts.Add(n.X); verts.Add(n.Y); verts.Add(n.Z);
-                    verts.Add(cr); verts.Add(cg); verts.Add(cb);
-                    verts.Add(1.0f);
-                }
-
-                for (int i = 0; i < segments; i++)
-                {
-                    float a0 = (i / (float)segments) * MathF.PI * 2f;
-                    float a1 = ((i + 1) / (float)segments) * MathF.PI * 2f;
-                    var radial0 = u * MathF.Cos(a0) + v * MathF.Sin(a0);
-                    var radial1 = u * MathF.Cos(a1) + v * MathF.Sin(a1);
-                    var p0 = baseCenter + radial0 * radius;
-                    var p1 = baseCenter + radial1 * radius;
-
-                    var n0 = Vector3D.Normalize(radial0 + d * (radius / MathF.Max(1e-4f, length)));
-                    var n1 = Vector3D.Normalize(radial1 + d * (radius / MathF.Max(1e-4f, length)));
-                    var nTip = Vector3D.Normalize((n0 + n1) * 0.5f);
-
-                    EmitVertex(tip, nTip, r, g, bl);
-                    EmitVertex(p0, n0, r, g, bl);
-                    EmitVertex(p1, n1, r, g, bl);
-
-                    AddTri(baseCenter, p1, p0, r * 0.85f, g * 0.85f, bl * 0.85f);
-                }
-            }
-
-            void AddSphere(Vector3D<float> c, float radius, float r, float g, float bl)
-            {
-                const int lon = 24;
-                const int lat = 16;
-
-                void AddSmoothTri(Vector3D<float> a, Vector3D<float> b, Vector3D<float> d)
-                {
-                    void Emit(Vector3D<float> p)
-                    {
-                        var n = Vector3D.Normalize(p - c);
-                        verts.Add(p.X); verts.Add(p.Y); verts.Add(p.Z);
-                        verts.Add(n.X); verts.Add(n.Y); verts.Add(n.Z);
-                        verts.Add(r); verts.Add(g); verts.Add(bl);
-                        verts.Add(1.0f);
-                    }
-
-                    Emit(a);
-                    Emit(b);
-                    Emit(d);
-                }
-
-                for (int iy = 0; iy < lat; iy++)
-                {
-                    float v0 = iy / (float)lat;
-                    float v1 = (iy + 1) / (float)lat;
-                    float th0 = v0 * MathF.PI;
-                    float th1 = v1 * MathF.PI;
-                    for (int ix = 0; ix < lon; ix++)
-                    {
-                        float u0 = ix / (float)lon;
-                        float u1 = (ix + 1) / (float)lon;
-                        float ph0 = u0 * MathF.PI * 2f;
-                        float ph1 = u1 * MathF.PI * 2f;
-
-                        Vector3D<float> P(float th, float ph)
-                        {
-                            float sx = MathF.Sin(th) * MathF.Cos(ph);
-                            float sy = MathF.Cos(th);
-                            float sz = MathF.Sin(th) * MathF.Sin(ph);
-                            return c + new Vector3D<float>(sx, sy, sz) * radius;
-                        }
-
-                        var p00 = P(th0, ph0);
-                        var p01 = P(th0, ph1);
-                        var p10 = P(th1, ph0);
-                        var p11 = P(th1, ph1);
-                        AddSmoothTri(p00, p10, p11);
-                        AddSmoothTri(p00, p11, p01);
-                    }
-                }
-            }
-
-            void AddPlaneHandle(int id, Vector3D<float> center, Vector3D<float> axisU, Vector3D<float> axisV, float halfU, float halfV, float r, float g, float bl)
-            {
-                bool isActive = activeHandle == id;
-                bool isHover = hoverHandle == id;
-                float alpha = (isActive || isHover) ? 1.0f : 0.20f;
-
-                float cr = r;
-                float cg = g;
-                float cb = bl;
-                if (isActive || isHover)
-                {
-                    float boost = isActive ? 1.75f : 1.55f;
-                    cr = Math.Clamp(cr * boost, 0f, 1f);
-                    cg = Math.Clamp(cg * boost, 0f, 1f);
-                    cb = Math.Clamp(cb * boost, 0f, 1f);
-
-                    // Keep the dominant channel vivid (especially red/blue handles).
-                    float maxC = MathF.Max(cr, MathF.Max(cg, cb));
-                    if (maxC > 1e-5f)
-                    {
-                        float inv = 1.0f / maxC;
-                        cr = Math.Clamp(cr * inv, 0f, 1f);
-                        cg = Math.Clamp(cg * inv, 0f, 1f);
-                        cb = Math.Clamp(cb * inv, 0f, 1f);
-                    }
-                }
-                float hu = halfU;
-                float hv = halfV;
-                var u = Vector3D.Normalize(axisU);
-                var v = Vector3D.Normalize(axisV);
-                var p00 = center - u * hu - v * hv;
-                var p01 = center - u * hu + v * hv;
-                var p10 = center + u * hu - v * hv;
-                var p11 = center + u * hu + v * hv;
-
-                var lightDir = Vector3D.Normalize(new Vector3D<float>(0.5f, 1.0f, 0.5f));
-                AddTriWithNormal(p00, p10, p11, lightDir, cr, cg, cb, alpha);
-                AddTriWithNormal(p00, p11, p01, lightDir, cr, cg, cb, alpha);
-                AddTriWithNormal(p00, p01, p11, lightDir, cr, cg, cb, alpha);
-                AddTriWithNormal(p00, p11, p10, lightDir, cr, cg, cb, alpha);
-            }
-
-            void AddMoveHandle(int id, Vector3D<float> pos, Vector3D<float> axis, float r, float g, float bl, float sizeMul = 1.0f)
-            {
-                var st = StyleFor(id, r, g, bl);
-                float scale = st.Scale * sizeMul;
-                AddCone(pos - axis * (baseSize * 0.8f * scale), axis, baseSize * 1.9f * scale, baseSize * 0.58f * scale, st.R, st.G, st.B);
-            }
-
-            void AddRotateHandle(int id, Vector3D<float> pos, float r, float g, float bl)
-            {
-                var st = StyleFor(id, r, g, bl);
-                AddSphere(pos, baseSize * 0.95f * st.Scale, st.R, st.G, st.B);
-            }
-
-            AddRotateHandle(1, centerMid, 1.0f, 1.0f, 0.2f);
-            float ySpan = MathF.Max(8f, s.YTop - s.YBottom);
-            float sharedFaceMin = MathF.Min(MathF.Min(2f * hx, 2f * hz), ySpan);
-            float sharedSquareHalf = MathF.Max(24f, sharedFaceMin / 3f);
-            float faceOffset = 0.75f;
-
-            bool IsFaceVisible(Vector3D<float> faceCenter, Vector3D<float> outwardNormal)
-            {
-                var toCam = camPos - faceCenter;
-                return Vector3D.Dot(outwardNormal, toCam) > 0.0f;
-            }
-
-            var xPosCenter = hXPos - xAxis * faceOffset;
-            var xNegCenter = hXNeg + xAxis * faceOffset;
-            var zPosCenter = hZPos - zAxis * faceOffset;
-            var zNegCenter = hZNeg + zAxis * faceOffset;
-
-            if (IsFaceVisible(xPosCenter, xAxis))
-                AddPlaneHandle(2, xPosCenter, zAxis, new Vector3D<float>(0, 1, 0), sharedSquareHalf, sharedSquareHalf, redR, redG, redB);
-            if (IsFaceVisible(xNegCenter, -xAxis))
-                AddPlaneHandle(3, xNegCenter, zAxis, new Vector3D<float>(0, 1, 0), sharedSquareHalf, sharedSquareHalf, redR, redG, redB);
-            if (IsFaceVisible(zPosCenter, zAxis))
-                AddPlaneHandle(4, zPosCenter, xAxis, new Vector3D<float>(0, 1, 0), sharedSquareHalf, sharedSquareHalf, 0.3f, 0.5f, 1.0f);
-            if (IsFaceVisible(zNegCenter, -zAxis))
-                AddPlaneHandle(5, zNegCenter, xAxis, new Vector3D<float>(0, 1, 0), sharedSquareHalf, sharedSquareHalf, 0.3f, 0.5f, 1.0f);
-
-            var yUp = new Vector3D<float>(0, 1, 0);
-            var topCenter = hTop - yUp * faceOffset;
-            var bottomCenter = hBottom + yUp * faceOffset;
-            if (IsFaceVisible(topCenter, yUp))
-                AddPlaneHandle(6, topCenter, xAxis, zAxis, sharedSquareHalf, sharedSquareHalf, 0.2f, 0.95f, 0.4f);
-            if (IsFaceVisible(bottomCenter, -yUp))
-                AddPlaneHandle(7, bottomCenter, xAxis, zAxis, sharedSquareHalf, sharedSquareHalf, 0.2f, 0.95f, 0.4f);
-            AddRotateHandle(8, hRotate, 1.0f, 0.6f, 0.1f);
-            AddMoveHandle(9, hMoveX, xAxis, redR, redG, redB, 0.95f);
-            AddMoveHandle(10, hMoveZ, zAxis, 0.225f, 0.475f, 1.0f, 0.95f);
-
-            return verts.ToArray();
-        }
-
-        private static float[] BuildScanVolumeLineVertices(
-            ScanVolumeSettings s,
-            int hoverHandle,
-            int activeHandle,
-            bool showHelpers,
-            bool showSelectionBox,
-            Vector3D<float> selectionStartWorld,
-            Vector3D<float> selectionEndWorld,
-            float selectionYBottom,
-            float selectionYTop)
-        {
-            float hx = s.SizeX * 0.5f;
-            float hz = s.SizeZ * 0.5f;
-            float yaw = s.YawDegrees * (MathF.PI / 180f);
-            float cos = MathF.Cos(yaw);
-            float sin = MathF.Sin(yaw);
-
-            Vector3D<float> RotateLocal(float lx, float lz, float y)
-            {
-                float wx = s.CenterX + (lx * cos - lz * sin);
-                float wz = s.CenterZ + (lx * sin + lz * cos);
-                return new Vector3D<float>(wx, y, wz);
-            }
-
-            Vector3D<float>[] top =
-            {
-                RotateLocal(-hx, -hz, s.YTop),
-                RotateLocal(hx, -hz, s.YTop),
-                RotateLocal(hx, hz, s.YTop),
-                RotateLocal(-hx, hz, s.YTop)
-            };
-
-            Vector3D<float>[] bottom =
-            {
-                RotateLocal(-hx, -hz, s.YBottom),
-                RotateLocal(hx, -hz, s.YBottom),
-                RotateLocal(hx, hz, s.YBottom),
-                RotateLocal(-hx, hz, s.YBottom)
-            };
-
-            var verts = new System.Collections.Generic.List<float>(32 * 2 * 6);
-
-            void AddLine(Vector3D<float> a, Vector3D<float> b, float r, float g, float bl)
-            {
-                verts.Add(a.X); verts.Add(a.Y); verts.Add(a.Z); verts.Add(r); verts.Add(g); verts.Add(bl);
-                verts.Add(b.X); verts.Add(b.Y); verts.Add(b.Z); verts.Add(r); verts.Add(g); verts.Add(bl);
-            }
-
-            for (int i = 0; i < 4; i++)
-            {
-                int n = (i + 1) % 4;
-                AddLine(top[i], top[n], 0.2f, 0.85f, 1.0f);
-                AddLine(bottom[i], bottom[n], 0.2f, 0.85f, 1.0f);
-                AddLine(top[i], bottom[i], 0.2f, 0.85f, 1.0f);
-            }
-
-            if (showHelpers)
-            {
-                float tiltRad = s.RayTiltDegrees * (MathF.PI / 180f);
-                float h = MathF.Tan(MathF.Abs(tiltRad));
-                float sign = s.RayTiltDegrees >= 0 ? 1f : -1f;
-                var dir = Vector3D.Normalize(new Vector3D<float>(MathF.Cos(yaw) * h * sign, -1f, MathF.Sin(yaw) * h * sign));
-
-                float arrowLen = MathF.Max(50f, (s.YTop - s.YBottom) * 0.8f);
-                var start = new Vector3D<float>(s.CenterX, s.YTop, s.CenterZ);
-                var end = start + dir * arrowLen;
-                AddLine(start, end, 1.0f, 0.6f, 0.1f);
-
-                var side = Vector3D.Normalize(Vector3D.Cross(dir, new Vector3D<float>(0, 1, 0)));
-                if (side.LengthSquared < 1e-6f)
-                {
-                    side = new Vector3D<float>(1, 0, 0);
-                }
-                var up = Vector3D.Normalize(Vector3D.Cross(side, dir));
-                float head = MathF.Max(12f, arrowLen * 0.08f);
-                
-                // Add thicker directional helper lines
-                for (int m = -1; m <= 1; m++) 
-                {
-                    var offsetDir = side * (0.5f * m);
-                    var offsetUp = up * (0.5f * m);
-                    AddLine(start + offsetDir + offsetUp, end + offsetDir + offsetUp, 1.0f, 0.6f, 0.1f);
-                }
-
-                AddLine(end, end - dir * head + side * (head * 0.5f), 1.0f, 0.6f, 0.1f);
-                AddLine(end, end - dir * head - side * (head * 0.5f), 1.0f, 0.6f, 0.1f);
-                AddLine(end, end - dir * head + up * (head * 0.35f), 1.0f, 0.6f, 0.1f);
-
-                float midY = (s.YTop + s.YBottom) * 0.5f;
-                var centerMid = new Vector3D<float>(s.CenterX, midY, s.CenterZ);
-                var xAxis = Vector3D.Normalize(new Vector3D<float>(MathF.Cos(yaw), 0f, MathF.Sin(yaw)));
-                var zAxis = Vector3D.Normalize(new Vector3D<float>(-MathF.Sin(yaw), 0f, MathF.Cos(yaw)));
-                float rotateHandleOffset = hx + MathF.Max(40f, MathF.Min(hx, hz) * 0.35f);
-                float moveOffset = MathF.Max(20f, MathF.Min(hx, hz) * 0.35f);
-                float rotateRadiusBase = Math.Clamp(MathF.Min(hx, hz) * 0.25f, 30f, 600f);
-                float rotateRadius = MathF.Max(rotateRadiusBase, moveOffset + MathF.Max(20f, MathF.Min(hx, hz) * 0.12f));
-                var hXPos = centerMid + xAxis * hx;
-                var hXNeg = centerMid - xAxis * hx;
-                var hZPos = centerMid + zAxis * hz;
-                var hZNeg = centerMid - zAxis * hz;
-                var hTop = new Vector3D<float>(s.CenterX, s.YTop, s.CenterZ);
-                var hBottom = new Vector3D<float>(s.CenterX, s.YBottom, s.CenterZ);
-                var hRotate = centerMid + xAxis * rotateHandleOffset;
-                var hMoveX = centerMid + xAxis * moveOffset;
-                var hMoveZ = centerMid + zAxis * moveOffset;
-
-                const float redR = 0.965f;
-                const float redG = 0.24f;
-                const float redB = 0.24f;
-
-                (float R, float G, float B) LineColorFor(int handleId, float r, float g, float b)
-                {
-                    if (activeHandle == handleId) return (1.0f, 0.95f, 0.25f);
-                    if (hoverHandle == handleId) return (1.0f, 1.0f, 1.0f);
-                    return (r, g, b);
-                }
-
-                float ringRadius = rotateRadius;
-                const int ringSegments = 40;
-                float ringScale = (activeHandle == 8) ? 1.45f : (hoverHandle == 8 ? 1.25f : 1.0f);
-                float ringR = (activeHandle == 8 || hoverHandle == 8) ? 1.0f : 1.0f;
-                float ringG = (activeHandle == 8) ? 0.95f : (hoverHandle == 8 ? 1.0f : 0.6f);
-                float ringB = (activeHandle == 8) ? 0.25f : (hoverHandle == 8 ? 1.0f : 0.1f);
-                var rotateLineStart = centerMid + xAxis * (ringRadius * ringScale);
-                AddLine(rotateLineStart, hRotate, ringR, ringG, ringB);
-                var moveXLine = LineColorFor(9, redR, redG, redB);
-                var moveZLine = LineColorFor(10, 0.15f, 0.45f, 1.0f);
-                AddLine(centerMid, hMoveX, moveXLine.R, moveXLine.G, moveXLine.B);
-                AddLine(centerMid, hMoveZ, moveZLine.R, moveZLine.G, moveZLine.B);
-                for (int i = 0; i < ringSegments; i++)
-                {
-                    float a0 = (i / (float)ringSegments) * MathF.PI * 2f;
-                    float a1 = ((i + 1) / (float)ringSegments) * MathF.PI * 2f;
-                    var p0 = centerMid + xAxis * (MathF.Cos(a0) * ringRadius * ringScale) + zAxis * (MathF.Sin(a0) * ringRadius * ringScale);
-                    var p1 = centerMid + xAxis * (MathF.Cos(a1) * ringRadius * ringScale) + zAxis * (MathF.Sin(a1) * ringRadius * ringScale);
-                    AddLine(p0, p1, ringR, ringG, ringB);
-                }
-            }
-
-            if (showSelectionBox)
-            {
-                float minX = MathF.Min(selectionStartWorld.X, selectionEndWorld.X);
-                float maxX = MathF.Max(selectionStartWorld.X, selectionEndWorld.X);
-                float minZ = MathF.Min(selectionStartWorld.Z, selectionEndWorld.Z);
-                float maxZ = MathF.Max(selectionStartWorld.Z, selectionEndWorld.Z);
-                float y0 = MathF.Min(selectionYBottom, selectionYTop);
-                float y1 = MathF.Max(selectionYBottom, selectionYTop);
-
-                if ((maxX - minX) < 0.5f) { minX -= 1f; maxX += 1f; }
-                if ((maxZ - minZ) < 0.5f) { minZ -= 1f; maxZ += 1f; }
-
-                var b0 = new Vector3D<float>(minX, y0, minZ);
-                var b1 = new Vector3D<float>(maxX, y0, minZ);
-                var b2 = new Vector3D<float>(maxX, y0, maxZ);
-                var b3 = new Vector3D<float>(minX, y0, maxZ);
-                var t0 = new Vector3D<float>(minX, y1, minZ);
-                var t1 = new Vector3D<float>(maxX, y1, minZ);
-                var t2 = new Vector3D<float>(maxX, y1, maxZ);
-                var t3 = new Vector3D<float>(minX, y1, maxZ);
-
-                const float sr = 1.0f;
-                const float sg = 0.42f;
-                const float sb = 0.95f;
-                if (MathF.Abs(y1 - y0) < 0.001f)
-                {
-                    AddLine(b0, b1, sr, sg, sb); AddLine(b1, b2, sr, sg, sb); AddLine(b2, b3, sr, sg, sb); AddLine(b3, b0, sr, sg, sb);
-                }
-                else
-                {
-                    AddLine(b0, b1, sr, sg, sb); AddLine(b1, b2, sr, sg, sb); AddLine(b2, b3, sr, sg, sb); AddLine(b3, b0, sr, sg, sb);
-                    AddLine(t0, t1, sr, sg, sb); AddLine(t1, t2, sr, sg, sb); AddLine(t2, t3, sr, sg, sb); AddLine(t3, t0, sr, sg, sb);
-                    AddLine(b0, t0, sr, sg, sb); AddLine(b1, t1, sr, sg, sb); AddLine(b2, t2, sr, sg, sb); AddLine(b3, t3, sr, sg, sb);
-                }
-            }
-
-            return verts.ToArray();
         }
 
         private static float PositiveModulo(float value, float modulus)

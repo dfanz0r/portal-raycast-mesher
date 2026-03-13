@@ -13,6 +13,7 @@ using MeshTool.Core.Algorithms;
 using MeshTool.Core.Config;
 using MeshTool.Core.Data;
 using MeshTool.Core.IO;
+using MeshTool.UI.Controllers;
 using MeshTool.UI.Models;
 
 namespace MeshTool.UI;
@@ -39,9 +40,6 @@ public partial class MainWindow : Window
     private int _selectedPointCount = 0;
     private readonly System.Collections.Generic.List<Vertex> _loadedPoints = new();
     private readonly System.Collections.Generic.List<Ray> _loadedMisses = new();
-    private readonly System.Collections.Generic.List<Vertex> _selectionOriginalPoints = new();
-    private readonly System.Collections.Generic.List<Vertex> _selectionWorkingPoints = new();
-    private bool _selectionHasPendingChanges = false;
     private float _loadedAvgDistance = 1.0f;
     private bool _preMonitorShowPoints;
     private bool _preMonitorShowSurfels;
@@ -53,6 +51,9 @@ public partial class MainWindow : Window
     private const float MinFineStep = 8f;
     private const float MaxFineStep = 96f;
     private float _finePhaseTargetStep = 24f;
+
+    // Controllers
+    private readonly SelectionManager _selectionManager = new();
 
     public MainWindow()
     {
@@ -706,11 +707,7 @@ public partial class MainWindow : Window
 
     private void BeginSelectionSessionFromLoadedData()
     {
-        _selectionOriginalPoints.Clear();
-        _selectionOriginalPoints.AddRange(_loadedPoints);
-        _selectionWorkingPoints.Clear();
-        _selectionWorkingPoints.AddRange(_loadedPoints);
-        _selectionHasPendingChanges = false;
+        _selectionManager.BeginSession(_loadedPoints);
     }
 
     private static (long, long, long) QuantizedPointKey(double x, double y, double z)
@@ -747,23 +744,7 @@ public partial class MainWindow : Window
 
         try
         {
-            int removed = 0;
-            var selectedSet = new System.Collections.Generic.HashSet<int>(selectedIndices.Length);
-            for (int i = 0; i < selectedIndices.Length; i++)
-            {
-                selectedSet.Add(selectedIndices[i]);
-            }
-
-            var kept = new System.Collections.Generic.List<Vertex>(_selectionWorkingPoints.Count);
-            for (int i = 0; i < _selectionWorkingPoints.Count; i++)
-            {
-                if (selectedSet.Contains(i)) removed++;
-                else kept.Add(_selectionWorkingPoints[i]);
-            }
-
-            _selectionWorkingPoints.Clear();
-            _selectionWorkingPoints.AddRange(kept);
-            _selectionHasPendingChanges = true;
+            int removed = _selectionManager.RemovePoints(selectedIndices);
 
             Viewport.ClearPointSelection();
             _selectedPointCount = 0;
@@ -771,7 +752,7 @@ public partial class MainWindow : Window
             _cachedMesh = null;
             UpdateMeshUiState();
             Viewport.LoadMesh(null);
-            Viewport.LoadData(_selectionWorkingPoints.ToArray(), _loadedMisses.ToArray(), _loadedAvgDistance, resetCamera: false);
+            Viewport.LoadData(_selectionManager.GetWorkingPointsArray(), _loadedMisses.ToArray(), _loadedAvgDistance, resetCamera: false);
             Viewport.ClearPointSelection();
             _isDbLoaded = true;
             Log($"[SELECT] Removed {removed} points from working set (not saved yet).");
@@ -788,7 +769,7 @@ public partial class MainWindow : Window
 
     private async void BtnSelectionSave_Click(object? sender, RoutedEventArgs e)
     {
-        if (!_selectionHasPendingChanges)
+        if (!_selectionManager.HasPendingChanges)
         {
             return;
         }
@@ -796,14 +777,11 @@ public partial class MainWindow : Window
         try
         {
             BtnSelectionSave.IsEnabled = false;
-            await Task.Run(() => DatabaseIO.SaveDatabase(_selectionWorkingPoints, _loadedMisses, _dbPath));
+            await Task.Run(() => DatabaseIO.SaveDatabase(_selectionManager.WorkingPoints, _loadedMisses, _dbPath));
 
-            _loadedPoints.Clear();
-            _loadedPoints.AddRange(_selectionWorkingPoints);
-            _selectionOriginalPoints.Clear();
-            _selectionOriginalPoints.AddRange(_selectionWorkingPoints);
-            _selectionHasPendingChanges = false;
-            Log($"[SELECT] Saved {_selectionWorkingPoints.Count} points to {_dbPath}");
+            _selectionManager.SyncToLoadedPoints(_loadedPoints);
+            _selectionManager.CommitChanges();
+            Log($"[SELECT] Saved {_selectionManager.PointCount} points to {_dbPath}");
         }
         catch (Exception ex)
         {
@@ -817,18 +795,16 @@ public partial class MainWindow : Window
 
     private void BtnSelectionDiscard_Click(object? sender, RoutedEventArgs e)
     {
-        if (!_selectionHasPendingChanges)
+        if (!_selectionManager.HasPendingChanges)
         {
             return;
         }
 
-        _selectionWorkingPoints.Clear();
-        _selectionWorkingPoints.AddRange(_selectionOriginalPoints);
-        _selectionHasPendingChanges = false;
+        _selectionManager.DiscardChanges();
         Viewport.ClearPointSelection();
         _selectedPointCount = 0;
         TxtSelectedPoints.Text = "Selected: 0";
-        Viewport.LoadData(_selectionWorkingPoints.ToArray(), _loadedMisses.ToArray(), _loadedAvgDistance, resetCamera: false);
+        Viewport.LoadData(_selectionManager.GetWorkingPointsArray(), _loadedMisses.ToArray(), _loadedAvgDistance, resetCamera: false);
         _isDbLoaded = true;
         Log("[SELECT] Discarded unsaved selection edits.");
         ApplyInteractionMode();
@@ -845,8 +821,8 @@ public partial class MainWindow : Window
         ChkPointSelectMode.IsEnabled = !monitorActive;
         BtnDeleteSelectedPoints.IsEnabled = selectionMode && _selectedPointCount > 0;
         BtnClearSelectedPoints.IsEnabled = selectionMode && _selectedPointCount > 0;
-        BtnSelectionSave.IsEnabled = !monitorActive && _selectionHasPendingChanges;
-        BtnSelectionDiscard.IsEnabled = !monitorActive && _selectionHasPendingChanges;
+        BtnSelectionSave.IsEnabled = !monitorActive && _selectionManager.HasPendingChanges;
+        BtnSelectionDiscard.IsEnabled = !monitorActive && _selectionManager.HasPendingChanges;
     }
 
     private async Task<bool> ConfirmClearDatabaseAsync()
@@ -1367,7 +1343,7 @@ public partial class MainWindow : Window
         {
             _monitorCts?.Cancel();
             Log("[MONITOR] Stopping...");
-            try { await _monitorTask; } catch { }
+            try { await _monitorTask; } catch (OperationCanceledException) { /* Expected on cancellation */ }
             _monitorTask = null;
             _monitorCts?.Dispose();
             _monitorCts = null;

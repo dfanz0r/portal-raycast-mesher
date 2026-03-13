@@ -1,8 +1,48 @@
-
-*.obj
-
-*.db
-
-obj/
-
+# Build outputs
 bin/
+obj/
+_buildcheck/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Rider
+.idea/
+
+# VS Code
+.vscode/
+
+# Build artifacts
+*.exe
+*.dll
+*.pdb
+*.cache
+
+# Generated data files
+*.db
+*.glb
+*.obj
+*.xyz
+*.zip
+*.7z
+
+# Logs
+*.log
+
+# Test results
+TestResults/
+
+# NuGet
+packages/
+*.nupkg
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Keep sample data folder (if created)
+!sample_data/

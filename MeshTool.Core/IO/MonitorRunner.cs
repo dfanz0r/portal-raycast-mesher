@@ -495,7 +495,7 @@ namespace MeshTool.Core.IO
             catch (Exception)
             {
                 // Clean up temp file if save failed
-                try { File.Delete(tmp); } catch { }
+                try { File.Delete(tmp); } catch (IOException) { /* Ignore cleanup errors */ }
                 throw;
             }
 

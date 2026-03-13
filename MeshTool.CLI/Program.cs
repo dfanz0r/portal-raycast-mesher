@@ -350,7 +350,7 @@ namespace MeshTool.Core
             if (selection < dbFiles.Count)
             {
                 // Update LastWriteTime to mark as recently used
-                try { File.SetLastWriteTime(dbFiles[selection].FullName, DateTime.Now); } catch { }
+                try { File.SetLastWriteTime(dbFiles[selection].FullName, DateTime.Now); } catch (IOException ex) { Console.WriteLine($"[WARN] Could not update file timestamp: {ex.Message}"); }
                 return dbFiles[selection].Name;
             }
             else
