@@ -20,7 +20,7 @@ namespace MeshTool.UI.Rendering
         private OpenGlViewport _viewport;
         private uint _vaoPoints, _vboInstances;
         private uint _vaoSurfels, _vboSurfelVerts;
-        private uint _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRayAccum, _shaderProgramRayReveal, _shaderProgramGridAccum, _shaderProgramGridReveal, _shaderProgramComposite, _shaderProgramMesh, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints, _shaderProgramFlatColor, _shaderProgramGizmoAccum, _shaderProgramGizmoReveal, _shaderProgramFlatAccum, _shaderProgramFlatReveal;
+        private ShaderProgram? _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRayAccum, _shaderProgramRayReveal, _shaderProgramGridAccum, _shaderProgramGridReveal, _shaderProgramComposite, _shaderProgramMesh, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints, _shaderProgramFlatColor, _shaderProgramGizmoAccum, _shaderProgramGizmoReveal, _shaderProgramFlatAccum, _shaderProgramFlatReveal;
         private uint _vaoRays, _vboRays;
         private uint _vaoMesh, _vboMesh;
         private uint _vaoGrid, _vboGrid;
@@ -114,69 +114,7 @@ namespace MeshTool.UI.Rendering
         private unsafe void InitShaders()
         {
             // --- POINT SHADER ---
-            string vsPoint = @"#version 300 es
-                precision highp float;
-                layout (location = 0) in vec3 aPos;
-                layout (location = 1) in vec3 aNormal;
-                layout (location = 2) in float aSelected;
-                uniform mat4 uView;
-                uniform mat4 uProjection;
-                
-                out vec3 WorldPos;
-                out vec3 Normal;
-                out float Selected;
-                void main() {
-                    gl_Position = uProjection * uView * vec4(aPos, 1.0);
-                    // Reverse Z
-                    gl_PointSize = 4.0;
-                    WorldPos = aPos;
-                    Normal = aNormal;
-                    Selected = aSelected;
-                }";
-            string fsPoint = @"#version 300 es
-                precision highp float;
-                in vec3 WorldPos;
-                in vec3 Normal;
-                in float Selected;
-                
-                uniform float uUseDynamicColor;
-                uniform float uWorldMinY;
-                uniform float uWorldMaxY;
-                
-                out vec4 FragColor;
-
-                vec3 colormap(float t) {
-                    const vec3 c0 = vec3(0.277, 0.005, 0.334);
-                    const vec3 c1 = vec3(0.198, 0.410, 0.551);
-                    const vec3 c2 = vec3(0.122, 0.638, 0.518);
-                    const vec3 c3 = vec3(0.395, 0.812, 0.347);
-                    const vec3 c4 = vec3(0.993, 0.906, 0.144);
-                    
-                    if (t < 0.25) return mix(c0, c1, t / 0.25);
-                    if (t < 0.5) return mix(c1, c2, (t - 0.25) / 0.25);
-                    if (t < 0.75) return mix(c2, c3, (t - 0.5) / 0.25);
-                    return mix(c3, c4, (t - 0.75) / 0.25);
-                }
-
-                void main() {
-                    vec3 n = length(Normal) > 0.0001 ? normalize(Normal) : vec3(0.0, 1.0, 0.0);
-                    vec3 lightDir = normalize(vec3(0.35, 1.0, 0.25));
-                    float lambert = max(dot(n, lightDir), 0.2);
-                    
-                    vec3 base;
-                    if (Selected > 0.5) {
-                        base = vec3(1.0, 0.62, 0.12);
-                    } else if (uUseDynamicColor > 0.5) {
-                        float range = max(0.001, uWorldMaxY - uWorldMinY);
-                        float normalizedHeight = clamp((WorldPos.y - uWorldMinY) / range, 0.0, 1.0);
-                        base = colormap(normalizedHeight);
-                    } else {
-                        base = mix(vec3(0.7, 0.8, 1.0), abs(n), 0.65);
-                    }
-                    
-                    FragColor = vec4(base * lambert, 1.0);
-                }";
-            _shaderProgramPoints = CreateProgram(vsPoint, fsPoint);
+            _shaderProgramPoints = new ShaderProgram(_gl, "Point", ShaderSource.PointVertex, ShaderSource.PointFragment, _viewport.OnLog);
 
             // --- SURFEL SHADER (Instanced) ---
             string vsSurfel = @"#version 300 es
@@ -257,7 +195,7 @@ namespace MeshTool.UI.Rendering
                     vec3 diffuse = diff * Color + vec3(0.1, 0.1, 0.3);
                     FragColor = vec4(diffuse, 1.0);
                 }";
-            _shaderProgramSurfels = CreateProgram(vsSurfel, fsSurfel);
+            _shaderProgramSurfels = new ShaderProgram(_gl, "Surfel", vsSurfel, fsSurfel, _viewport.OnLog);
 
             // --- RAY SHADERS (Weighted Blended OIT) ---
             string vsRay = @"#version 300 es
@@ -317,8 +255,8 @@ namespace MeshTool.UI.Rendering
                 void main() {
                     FragColor = vec4(Alpha, Alpha, Alpha, Alpha);
                 }";
-            _shaderProgramRayAccum = CreateProgram(vsRay, fsRayAccum);
-            _shaderProgramRayReveal = CreateProgram(vsRay, fsRayReveal);
+            _shaderProgramRayAccum = new ShaderProgram(_gl, "RayAccum", vsRay, fsRayAccum, _viewport.OnLog);
+            _shaderProgramRayReveal = new ShaderProgram(_gl, "RayReveal", vsRay, fsRayReveal, _viewport.OnLog);
 
             string vsComposite = @"#version 300 es
                 precision highp float;
@@ -343,7 +281,7 @@ namespace MeshTool.UI.Rendering
                     vec3 outColor = trans * (1.0 - reveal) + opaque * reveal;
                     FragColor = vec4(outColor, 1.0);
                 }";
-            _shaderProgramComposite = CreateProgram(vsComposite, fsComposite);
+            _shaderProgramComposite = new ShaderProgram(_gl, "Composite", vsComposite, fsComposite, _viewport.OnLog);
 
             // --- AXES SHADER ---
             string vsAxes = @"#version 300 es
@@ -365,7 +303,7 @@ namespace MeshTool.UI.Rendering
                 void main() {
                     FragColor = vec4(Color, 1.0);
                 }";
-            _shaderProgramAxes = CreateProgram(vsAxes, fsAxes);
+            _shaderProgramAxes = new ShaderProgram(_gl, "Axes", vsAxes, fsAxes, _viewport.OnLog);
 
             string vsDensityPoints = @"#version 300 es
                 precision highp float;
@@ -403,7 +341,7 @@ namespace MeshTool.UI.Rendering
                     }
                     FragColor = vec4(Color, alpha);
                 }";
-            _shaderProgramDensityPoints = CreateProgram(vsDensityPoints, fsDensityPoints);
+            _shaderProgramDensityPoints = new ShaderProgram(_gl, "DensityPoints", vsDensityPoints, fsDensityPoints, _viewport.OnLog);
 
             string vsGizmoSolid = @"#version 300 es
                 precision highp float;
@@ -436,7 +374,7 @@ namespace MeshTool.UI.Rendering
                     vec3 c = clamp(vColor * diff, 0.0, 1.0);
                     FragColor = vec4(c, 1.0);
                 }";
-            _shaderProgramGizmoSolid = CreateProgram(vsGizmoSolid, fsGizmoSolid);
+            _shaderProgramGizmoSolid = new ShaderProgram(_gl, "GizmoSolid", vsGizmoSolid, fsGizmoSolid, _viewport.OnLog);
 
             string fsGizmoAccum = @"#version 300 es
                 precision highp float;
@@ -467,8 +405,8 @@ namespace MeshTool.UI.Rendering
                     if (alpha < 0.001) discard;
                     FragColor = vec4(alpha, alpha, alpha, alpha);
                 }";
-            _shaderProgramGizmoAccum = CreateProgram(vsGizmoSolid, fsGizmoAccum);
-            _shaderProgramGizmoReveal = CreateProgram(vsGizmoSolid, fsGizmoReveal);
+            _shaderProgramGizmoAccum = new ShaderProgram(_gl, "GizmoAccum", vsGizmoSolid, fsGizmoAccum, _viewport.OnLog);
+            _shaderProgramGizmoReveal = new ShaderProgram(_gl, "GizmoReveal", vsGizmoSolid, fsGizmoReveal, _viewport.OnLog);
 
             // --- MESH SHADER ---
             string vsMesh = @"#version 300 es
@@ -493,7 +431,7 @@ namespace MeshTool.UI.Rendering
                     vec3 color = vec3(0.8, 0.8, 0.8) * diff;
                     FragColor = vec4(color, 1.0);
                 }";
-            _shaderProgramMesh = CreateProgram(vsMesh, fsMesh);
+            _shaderProgramMesh = new ShaderProgram(_gl, "Mesh", vsMesh, fsMesh, _viewport.OnLog);
 
             // --- GRID SHADER ---
             string vsGrid = @"#version 300 es
@@ -636,8 +574,8 @@ namespace MeshTool.UI.Rendering
                     FragColor = vec4(finalColor.a, finalColor.a, finalColor.a, finalColor.a);
                 }";
 
-            _shaderProgramGridAccum = CreateProgram(vsGrid, fsGridAccum);
-            _shaderProgramGridReveal = CreateProgram(vsGrid, fsGridReveal);
+            _shaderProgramGridAccum = new ShaderProgram(_gl, "GridAccum", vsGrid, fsGridAccum, _viewport.OnLog);
+            _shaderProgramGridReveal = new ShaderProgram(_gl, "GridReveal", vsGrid, fsGridReveal, _viewport.OnLog);
 
             string vsFlatColor = @"#version 300 es
                 precision highp float;
@@ -654,7 +592,7 @@ namespace MeshTool.UI.Rendering
                 void main() {
                     FragColor = uColor;
                 }";
-            _shaderProgramFlatColor = CreateProgram(vsFlatColor, fsFlatColor);
+            _shaderProgramFlatColor = new ShaderProgram(_gl, "FlatColor", vsFlatColor, fsFlatColor, _viewport.OnLog);
 
             string fsFlatAccum = @"#version 300 es
                 precision highp float;
@@ -677,47 +615,13 @@ namespace MeshTool.UI.Rendering
                     if (alpha < 0.001) discard;
                     FragColor = vec4(alpha, alpha, alpha, alpha);
                 }";
-            _shaderProgramFlatAccum = CreateProgram(vsFlatColor, fsFlatAccum);
-            _shaderProgramFlatReveal = CreateProgram(vsFlatColor, fsFlatReveal);
+            _shaderProgramFlatAccum = new ShaderProgram(_gl, "FlatAccum", vsFlatColor, fsFlatAccum, _viewport.OnLog);
+            _shaderProgramFlatReveal = new ShaderProgram(_gl, "FlatReveal", vsFlatColor, fsFlatReveal, _viewport.OnLog);
         }
 
-        private unsafe uint CreateProgram(string vsSource, string fsSource)
+        private unsafe void SetUniforms(ShaderProgram program, Matrix4X4<float> view, Matrix4X4<float> proj)
         {
-            uint vs = _gl.CreateShader(ShaderType.VertexShader);
-            _gl.ShaderSource(vs, vsSource);
-            _gl.CompileShader(vs);
-            _gl.GetShader(vs, ShaderParameterName.CompileStatus, out int vStatus);
-            if (vStatus == 0)
-            {
-                string log = _gl.GetShaderInfoLog(vs);
-                _viewport.OnLog?.Invoke($"[VS ERROR] {log}");
-            }
-
-            uint fs = _gl.CreateShader(ShaderType.FragmentShader);
-            _gl.ShaderSource(fs, fsSource);
-            _gl.CompileShader(fs);
-            _gl.GetShader(fs, ShaderParameterName.CompileStatus, out int fStatus);
-            if (fStatus == 0)
-            {
-                string log = _gl.GetShaderInfoLog(fs);
-                _viewport.OnLog?.Invoke($"[FS ERROR] {log}");
-            }
-
-            uint program = _gl.CreateProgram();
-            _gl.AttachShader(program, vs);
-            _gl.AttachShader(program, fs);
-            _gl.LinkProgram(program);
-            _gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int lStatus);
-            if (lStatus == 0)
-            {
-                string log = _gl.GetProgramInfoLog(program);
-                _viewport.OnLog?.Invoke($"[LINK ERROR] {log}");
-            }
-
-            _gl.DeleteShader(vs);
-            _gl.DeleteShader(fs);
-
-            return program;
+            program.SetViewProjection(view, proj);
         }
 
         private unsafe void InitBuffers()
@@ -924,22 +828,22 @@ namespace MeshTool.UI.Rendering
             _gl.DeleteBuffer(_vboScanHandles);
             _gl.DeleteBuffer(_vboScanDensity);
             _gl.DeleteBuffer(_vboSelectionFill);
-            _gl.DeleteProgram(_shaderProgramPoints);
-            _gl.DeleteProgram(_shaderProgramSurfels);
-            _gl.DeleteProgram(_shaderProgramRayAccum);
-            _gl.DeleteProgram(_shaderProgramRayReveal);
-            _gl.DeleteProgram(_shaderProgramGridAccum);
-            _gl.DeleteProgram(_shaderProgramGridReveal);
-            _gl.DeleteProgram(_shaderProgramComposite);
-            _gl.DeleteProgram(_shaderProgramMesh);
-            _gl.DeleteProgram(_shaderProgramAxes);
-            _gl.DeleteProgram(_shaderProgramGizmoSolid);
-            _gl.DeleteProgram(_shaderProgramDensityPoints);
-            _gl.DeleteProgram(_shaderProgramFlatColor);
-            _gl.DeleteProgram(_shaderProgramGizmoAccum);
-            _gl.DeleteProgram(_shaderProgramGizmoReveal);
-            _gl.DeleteProgram(_shaderProgramFlatAccum);
-            _gl.DeleteProgram(_shaderProgramFlatReveal);
+            _shaderProgramPoints?.Dispose();
+            _shaderProgramSurfels?.Dispose();
+            _shaderProgramRayAccum?.Dispose();
+            _shaderProgramRayReveal?.Dispose();
+            _shaderProgramGridAccum?.Dispose();
+            _shaderProgramGridReveal?.Dispose();
+            _shaderProgramComposite?.Dispose();
+            _shaderProgramMesh?.Dispose();
+            _shaderProgramAxes?.Dispose();
+            _shaderProgramGizmoSolid?.Dispose();
+            _shaderProgramDensityPoints?.Dispose();
+            _shaderProgramFlatColor?.Dispose();
+            _shaderProgramGizmoAccum?.Dispose();
+            _shaderProgramGizmoReveal?.Dispose();
+            _shaderProgramFlatAccum?.Dispose();
+            _shaderProgramFlatReveal?.Dispose();
             _gl.Dispose();
         }
 
@@ -1744,7 +1648,7 @@ namespace MeshTool.UI.Rendering
             // 1. Draw Points
             if (_viewport.ShowPoints && _pointCount > 0)
             {
-                _gl.UseProgram(_shaderProgramPoints);
+                _gl.UseProgram(_shaderProgramPoints!.Handle);
                 SetUniforms(_shaderProgramPoints, view, proj);
 
                 _gl.BindVertexArray(_vaoPoints);
@@ -1753,11 +1657,11 @@ namespace MeshTool.UI.Rendering
                 // Force unbind element array buffer in case it was bound elsewhere
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, 0);
 
-                int dynColLocP = _gl.GetUniformLocation(_shaderProgramPoints, "uUseDynamicColor");
+                int dynColLocP = _gl.GetUniformLocation(_shaderProgramPoints.Handle, "uUseDynamicColor");
                 _gl.Uniform1(dynColLocP, UseDynamicColorMapping ? 1.0f : 0.0f);
 
-                int minLocP = _gl.GetUniformLocation(_shaderProgramPoints, "uWorldMinY");
-                int maxLocP = _gl.GetUniformLocation(_shaderProgramPoints, "uWorldMaxY");
+                int minLocP = _gl.GetUniformLocation(_shaderProgramPoints.Handle, "uWorldMinY");
+                int maxLocP = _gl.GetUniformLocation(_shaderProgramPoints.Handle, "uWorldMaxY");
                 _gl.Uniform1(minLocP, _minPointY);
                 _gl.Uniform1(maxLocP, _maxPointY);
 
@@ -1767,17 +1671,17 @@ namespace MeshTool.UI.Rendering
             // 2. Draw Surfels
             if (_viewport.ShowSurfels && _pointCount > 0)
             {
-                _gl.UseProgram(_shaderProgramSurfels);
+                _gl.UseProgram(_shaderProgramSurfels!.Handle);
                 SetUniforms(_shaderProgramSurfels, view, proj);
 
-                int scaleLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uScale");
+                int scaleLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uScale");
                 _gl.Uniform1(scaleLoc, _avgDistance * 0.5f * _viewport.SurfelScale);
 
-                int timeLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uCurrentTime");
+                int timeLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uCurrentTime");
                 _gl.Uniform1(timeLoc, currentTime);
 
-                int hasHoveredLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uHasHovered");
-                int hoveredPosLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uHoveredPos");
+                int hasHoveredLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uHasHovered");
+                int hoveredPosLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uHoveredPos");
                 if (HoveredCoordinate.HasValue)
                 {
                     _gl.Uniform1(hasHoveredLoc, 1.0f);
@@ -1788,11 +1692,11 @@ namespace MeshTool.UI.Rendering
                     _gl.Uniform1(hasHoveredLoc, 0.0f);
                 }
 
-                int dynColLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uUseDynamicColor");
+                int dynColLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uUseDynamicColor");
                 _gl.Uniform1(dynColLoc, UseDynamicColorMapping ? 1.0f : 0.0f);
 
-                int minLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uWorldMinY");
-                int maxLoc = _gl.GetUniformLocation(_shaderProgramSurfels, "uWorldMaxY");
+                int minLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uWorldMinY");
+                int maxLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uWorldMaxY");
                 _gl.Uniform1(minLoc, _minPointY);
                 _gl.Uniform1(maxLoc, _maxPointY);
 
@@ -1803,7 +1707,7 @@ namespace MeshTool.UI.Rendering
             // 3. Draw Mesh
             if (_viewport.ShowMesh && _meshVertexCount > 0)
             {
-                _gl.UseProgram(_shaderProgramMesh);
+                _gl.UseProgram(_shaderProgramMesh!.Handle);
                 SetUniforms(_shaderProgramMesh, view, proj);
 
                 _gl.BindVertexArray(_vaoMesh);
@@ -1813,7 +1717,7 @@ namespace MeshTool.UI.Rendering
             // 4. Draw Axes
             if (_viewport.ShowGrid)
             {
-                _gl.UseProgram(_shaderProgramAxes);
+                _gl.UseProgram(_shaderProgramAxes!.Handle);
                 SetUniforms(_shaderProgramAxes, view, proj);
 
                 _gl.BindVertexArray(_vaoAxes);
@@ -1847,19 +1751,19 @@ namespace MeshTool.UI.Rendering
                         _gl.DepthMask(false);
                         _gl.Enable(EnableCap.Blend);
                         _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-                        _gl.UseProgram(_shaderProgramDensityPoints);
+                        _gl.UseProgram(_shaderProgramDensityPoints!.Handle);
                         SetUniforms(_shaderProgramDensityPoints, view, proj);
                         _gl.BindVertexArray(_vaoScanDensity);
                         var camPosPreview = _viewport.Camera.Position;
-                        int camLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints, "uCameraXZ");
-                        int radiusLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints, "uFadeRadius");
-                        int bandLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints, "uFadeBand");
-                        int fadeEnableLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints, "uEnableFade");
+                        int camLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints.Handle, "uCameraXZ");
+                        int radiusLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints.Handle, "uFadeRadius");
+                        int bandLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints.Handle, "uFadeBand");
+                        int fadeEnableLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints.Handle, "uEnableFade");
                         _gl.Uniform2(camLoc, camPosPreview.X, camPosPreview.Z);
                         float fadeBand = Math.Clamp(_fineDensityPreviewRadius * 0.22f, 260f, 1100f);
                         _gl.Uniform1(radiusLoc, _fineDensityPreviewRadius);
                         _gl.Uniform1(bandLoc, fadeBand);
-                        int psLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints, "uPointSize");
+                        int psLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints.Handle, "uPointSize");
                         if (_scanDensityBroadCount > 0)
                         {
                             _gl.Uniform1(fadeEnableLoc, 0.0f);
@@ -1885,7 +1789,7 @@ namespace MeshTool.UI.Rendering
                         _gl.DepthMask(true);
                         _gl.Disable(EnableCap.Blend);
                         _gl.Disable(EnableCap.CullFace);
-                        _gl.UseProgram(_shaderProgramGizmoSolid);
+                        _gl.UseProgram(_shaderProgramGizmoSolid!.Handle);
                         SetUniforms(_shaderProgramGizmoSolid, view, proj);
                         _gl.BindVertexArray(_vaoScanHandles);
                         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_scanHandleVertexCount);
@@ -1894,7 +1798,7 @@ namespace MeshTool.UI.Rendering
                     if (ShowScanVolume && _scanVolumeVertexCount > 0)
                     {
                         _gl.DepthMask(false);
-                        _gl.UseProgram(_shaderProgramAxes);
+                        _gl.UseProgram(_shaderProgramAxes!.Handle);
                         SetUniforms(_shaderProgramAxes, view, proj);
                         _gl.BindVertexArray(_vaoScanVolume);
                         _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_scanVolumeVertexCount);
@@ -1928,19 +1832,19 @@ namespace MeshTool.UI.Rendering
 
                 if (_viewport.ShowGrid)
                 {
-                    _gl.UseProgram(_shaderProgramGridAccum);
-                    SetGridUniforms(_shaderProgramGridAccum, view, proj, camPos);
+                    _gl.UseProgram(_shaderProgramGridAccum!.Handle);
+                    SetGridUniforms(_shaderProgramGridAccum.Handle, view, proj, camPos);
                     _gl.BindVertexArray(_vaoGrid);
                     _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
                 }
 
                 if (hasRays)
                 {
-                    _gl.UseProgram(_shaderProgramRayAccum);
+                    _gl.UseProgram(_shaderProgramRayAccum!.Handle);
                     SetUniforms(_shaderProgramRayAccum, view, proj);
-                    int timeLocAccum = _gl.GetUniformLocation(_shaderProgramRayAccum, "uCurrentTime");
+                    int timeLocAccum = _gl.GetUniformLocation(_shaderProgramRayAccum.Handle, "uCurrentTime");
                     _gl.Uniform1(timeLocAccum, currentTime);
-                    _gl.Uniform3(_gl.GetUniformLocation(_shaderProgramRayAccum, "uCameraPos"), camPos.X, camPos.Y, camPos.Z);
+                    _gl.Uniform3(_gl.GetUniformLocation(_shaderProgramRayAccum.Handle, "uCameraPos"), camPos.X, camPos.Y, camPos.Z);
                     _gl.BindVertexArray(_vaoRays);
                     if (hasMissRays)
                     {
@@ -1954,9 +1858,9 @@ namespace MeshTool.UI.Rendering
 
                 if (hasSelectionFill)
                 {
-                    _gl.UseProgram(_shaderProgramFlatAccum);
+                    _gl.UseProgram(_shaderProgramFlatAccum!.Handle);
                     SetUniforms(_shaderProgramFlatAccum, view, proj);
-                    int colorLocAccum = _gl.GetUniformLocation(_shaderProgramFlatAccum, "uColor");
+                    int colorLocAccum = _gl.GetUniformLocation(_shaderProgramFlatAccum.Handle, "uColor");
                     _gl.Uniform4(colorLocAccum, 0.88f, 0.42f, 1.0f, 0.22f);
                     _gl.Disable(EnableCap.CullFace);
                     _gl.BindVertexArray(_vaoSelectionFill);
@@ -1965,7 +1869,7 @@ namespace MeshTool.UI.Rendering
 
                 if (hasScanHandlePlanes)
                 {
-                    _gl.UseProgram(_shaderProgramGizmoAccum);
+                    _gl.UseProgram(_shaderProgramGizmoAccum!.Handle);
                     SetUniforms(_shaderProgramGizmoAccum, view, proj);
                     _gl.Disable(EnableCap.CullFace);
                     _gl.BindVertexArray(_vaoScanHandles);
@@ -1980,19 +1884,19 @@ namespace MeshTool.UI.Rendering
 
                 if (_viewport.ShowGrid)
                 {
-                    _gl.UseProgram(_shaderProgramGridReveal);
-                    SetGridUniforms(_shaderProgramGridReveal, view, proj, camPos);
+                    _gl.UseProgram(_shaderProgramGridReveal!.Handle);
+                    SetGridUniforms(_shaderProgramGridReveal.Handle, view, proj, camPos);
                     _gl.BindVertexArray(_vaoGrid);
                     _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
                 }
 
                 if (hasRays)
                 {
-                    _gl.UseProgram(_shaderProgramRayReveal);
+                    _gl.UseProgram(_shaderProgramRayReveal!.Handle);
                     SetUniforms(_shaderProgramRayReveal, view, proj);
-                    int timeLocReveal = _gl.GetUniformLocation(_shaderProgramRayReveal, "uCurrentTime");
+                    int timeLocReveal = _gl.GetUniformLocation(_shaderProgramRayReveal.Handle, "uCurrentTime");
                     _gl.Uniform1(timeLocReveal, currentTime);
-                    _gl.Uniform3(_gl.GetUniformLocation(_shaderProgramRayReveal, "uCameraPos"), camPos.X, camPos.Y, camPos.Z);
+                    _gl.Uniform3(_gl.GetUniformLocation(_shaderProgramRayReveal.Handle, "uCameraPos"), camPos.X, camPos.Y, camPos.Z);
                     _gl.BindVertexArray(_vaoRays);
                     if (hasMissRays)
                     {
@@ -2006,9 +1910,9 @@ namespace MeshTool.UI.Rendering
 
                 if (hasSelectionFill)
                 {
-                    _gl.UseProgram(_shaderProgramFlatReveal);
+                    _gl.UseProgram(_shaderProgramFlatReveal!.Handle);
                     SetUniforms(_shaderProgramFlatReveal, view, proj);
-                    int colorLocReveal = _gl.GetUniformLocation(_shaderProgramFlatReveal, "uColor");
+                    int colorLocReveal = _gl.GetUniformLocation(_shaderProgramFlatReveal.Handle, "uColor");
                     _gl.Uniform4(colorLocReveal, 0.88f, 0.42f, 1.0f, 0.22f);
                     _gl.Disable(EnableCap.CullFace);
                     _gl.BindVertexArray(_vaoSelectionFill);
@@ -2017,7 +1921,7 @@ namespace MeshTool.UI.Rendering
 
                 if (hasScanHandlePlanes)
                 {
-                    _gl.UseProgram(_shaderProgramGizmoReveal);
+                    _gl.UseProgram(_shaderProgramGizmoReveal!.Handle);
                     SetUniforms(_shaderProgramGizmoReveal, view, proj);
                     _gl.Disable(EnableCap.CullFace);
                     _gl.BindVertexArray(_vaoScanHandles);
@@ -2044,18 +1948,18 @@ namespace MeshTool.UI.Rendering
                 _gl.Viewport(0, 0, (uint)width, (uint)height);
                 _gl.Disable(EnableCap.DepthTest);
 
-                _gl.UseProgram(_shaderProgramComposite);
+                _gl.UseProgram(_shaderProgramComposite!.Handle);
                 _gl.ActiveTexture(TextureUnit.Texture0);
                 _gl.BindTexture(TextureTarget.Texture2D, _framebufferManager.ResolveColorTexture);
-                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite, "uOpaqueColor"), 0);
+                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite.Handle, "uOpaqueColor"), 0);
 
                 _gl.ActiveTexture(TextureUnit.Texture1);
                 _gl.BindTexture(TextureTarget.Texture2D, _framebufferManager.OitAccumTexture);
-                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite, "uAccumColor"), 1);
+                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite.Handle, "uAccumColor"), 1);
 
                 _gl.ActiveTexture(TextureUnit.Texture2);
                 _gl.BindTexture(TextureTarget.Texture2D, _framebufferManager.OitRevealTexture);
-                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite, "uRevealColor"), 2);
+                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite.Handle, "uRevealColor"), 2);
 
                 _gl.BindVertexArray(_vaoGrid);
                 _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
