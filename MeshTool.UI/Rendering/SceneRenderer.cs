@@ -15,23 +15,15 @@ namespace MeshTool.UI.Rendering
         private const int FineDensityPreviewTargetPoints = 36000;
         private const float FineDensityPreviewAdjustRate = 0.35f;
         private const float ScanDensityRebuildMoveThreshold = 24f;
-        private const int PointInstanceStride = 8 * sizeof(float);
-        private const int RayVertexStride = 7 * sizeof(float);
-        private const int MeshVertexStride = 6 * sizeof(float);
         private const int AxesVertexStride = 6 * sizeof(float);
-        private const int ScanLineVertexStride = 6 * sizeof(float);
-        private const int ScanHandleVertexStride = 10 * sizeof(float);
-        private const int SelectionFillVertexStride = 3 * sizeof(float);
         private float _fineDensityPreviewRadius = 3200f;
         private GL _gl;
         private OpenGlViewport _viewport;
-        private uint _vaoPoints, _vboInstances;
-        private uint _vaoSurfels, _vboSurfelVerts;
-        private ShaderProgram? _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramAxes, _shaderProgramFlatColor;
+        private ShaderProgram? _shaderProgramAxes, _shaderProgramFlatColor;
         private uint _vaoRays;
         private uint _vaoAxes, _vboAxes;
         private VertexArray? _axesBuffer;
-        private DynamicBuffer? _pointInstanceBuffer;
+        private PointRenderer? _pointRenderer;
         private RayRenderer? _rayRenderer;
         private GridRenderer? _gridRenderer;
         private MeshRenderer? _meshRenderer;
@@ -41,8 +33,6 @@ namespace MeshTool.UI.Rendering
         private int _pointCapacity;
         private int _rayCapacity; // Number of lines capacity
         private float _avgDistance = 1.0f;
-
-        private int _surfelVertexCount;
 
         private OitFramebufferManager? _framebufferManager;
         private float _latestSpawnTime = 0f;
@@ -103,6 +93,7 @@ namespace MeshTool.UI.Rendering
             }
 
             _framebufferManager = new OitFramebufferManager(_gl, 4, _viewport.OnLog);
+            _pointRenderer = new PointRenderer(_gl, _viewport.OnLog);
             _gridRenderer = new GridRenderer(_gl, _viewport.OnLog);
             _rayRenderer = new RayRenderer(_gl, _viewport.OnLog);
             _meshRenderer = new MeshRenderer(_gl, _viewport.OnLog);
@@ -114,24 +105,6 @@ namespace MeshTool.UI.Rendering
 
         private unsafe void InitShaders()
         {
-            // --- POINT SHADER ---
-            _shaderProgramPoints = new ShaderProgram(_gl, "Point", ShaderSource.PointVertex, ShaderSource.PointFragment, _viewport.OnLog);
-
-            // --- SURFEL SHADER (Instanced) ---
-            string vsSurfel = ShaderSource.SurfelVertex;
-            string fsSurfel = @"#version 300 es
-                precision highp float;
-                in vec3 Normal;
-                in vec3 Color;
-                out vec4 FragColor;
-                void main() {
-                    vec3 lightDir = normalize(vec3(1.0, 2.0, 1.0));
-                    float diff = max(dot(Normal, lightDir), 0.0);
-                    vec3 diffuse = diff * Color + vec3(0.1, 0.1, 0.3);
-                    FragColor = vec4(diffuse, 1.0);
-                }";
-            _shaderProgramSurfels = new ShaderProgram(_gl, "Surfel", vsSurfel, fsSurfel, _viewport.OnLog);
-
             // --- AXES SHADER ---
             string vsAxes = ShaderSource.AxesVertex;
             string fsAxes = ShaderSource.AxesFragment;
@@ -149,68 +122,6 @@ namespace MeshTool.UI.Rendering
 
         private unsafe void InitBuffers()
         {
-            _pointInstanceBuffer = new DynamicBuffer(_gl, PointInstanceStride);
-            _vboInstances = _pointInstanceBuffer.Handle;
-
-            // Points VAO
-            _vaoPoints = _gl.GenVertexArray();
-            _gl.BindVertexArray(_vaoPoints);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)0);
-            _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(3 * sizeof(float)));
-            _gl.EnableVertexAttribArray(1);
-            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(7 * sizeof(float)));
-            _gl.EnableVertexAttribArray(2);
-
-            // Surfels VAO
-            _vaoSurfels = _gl.GenVertexArray();
-            _vboSurfelVerts = _gl.GenBuffer();
-
-            // Create unit circle in XZ plane (Y up)
-            int segments = 16;
-            _surfelVertexCount = segments * 3; // Triangles from center
-            float[] surfelVerts = new float[_surfelVertexCount * 3];
-            for (int i = 0; i < segments; i++)
-            {
-                float a1 = (float)i / segments * 2.0f * MathF.PI;
-                float a2 = (float)(i + 1) / segments * 2.0f * MathF.PI;
-
-                int idx = i * 9;
-                // Center
-                surfelVerts[idx + 0] = 0f; surfelVerts[idx + 1] = 0f; surfelVerts[idx + 2] = 0f;
-                // V1
-                surfelVerts[idx + 3] = MathF.Cos(a1); surfelVerts[idx + 4] = 0f; surfelVerts[idx + 5] = MathF.Sin(a1);
-                // V2
-                surfelVerts[idx + 6] = MathF.Cos(a2); surfelVerts[idx + 7] = 0f; surfelVerts[idx + 8] = MathF.Sin(a2);
-            }
-
-            _gl.BindVertexArray(_vaoSurfels);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboSurfelVerts);
-            fixed (float* v = surfelVerts)
-            {
-                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(surfelVerts.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
-            }
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
-            _gl.EnableVertexAttribArray(0);
-
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)0);
-            _gl.EnableVertexAttribArray(1);
-            _gl.VertexAttribDivisor(1, 1); // Instanced
-
-            _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(3 * sizeof(float)));
-            _gl.EnableVertexAttribArray(2);
-            _gl.VertexAttribDivisor(2, 1); // Instanced
-
-            _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(6 * sizeof(float)));
-            _gl.EnableVertexAttribArray(3);
-            _gl.VertexAttribDivisor(3, 1); // Instanced
-
-            _gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(7 * sizeof(float)));
-            _gl.EnableVertexAttribArray(4);
-            _gl.VertexAttribDivisor(4, 1); // Instanced
-
             // Rays VAO
             _vaoRays = _gl.GenVertexArray();
             _rayRenderer!.ConfigureVao(_vaoRays);
@@ -236,45 +147,21 @@ namespace MeshTool.UI.Rendering
 
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
             _gl.BindVertexArray(0);
-
-            RebindPointVaos();
-        }
-
-        private unsafe void RebindPointVaos()
-        {
-            _gl.BindVertexArray(_vaoPoints);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(3 * sizeof(float)));
-            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(7 * sizeof(float)));
-
-            _gl.BindVertexArray(_vaoSurfels);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)0);
-            _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(3 * sizeof(float)));
-            _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(6 * sizeof(float)));
-            _gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(7 * sizeof(float)));
         }
 
         public void Deinit()
         {
             _framebufferManager?.Dispose();
+            _pointRenderer?.Dispose();
             _gridRenderer?.Dispose();
             _rayRenderer?.Dispose();
             _meshRenderer?.Dispose();
             _volumeRenderer?.Dispose();
             _axesBuffer?.Dispose();
-            _pointInstanceBuffer?.Dispose();
 
-            _gl.DeleteVertexArray(_vaoPoints);
-            _gl.DeleteVertexArray(_vaoSurfels);
             _gl.DeleteVertexArray(_vaoRays);
             _vaoAxes = 0;
             _vboAxes = 0;
-            _vboInstances = 0;
-            _gl.DeleteBuffer(_vboSurfelVerts);
-            _shaderProgramPoints?.Dispose();
-            _shaderProgramSurfels?.Dispose();
             _shaderProgramAxes?.Dispose();
             _shaderProgramFlatColor?.Dispose();
             _gl.Dispose();
@@ -538,58 +425,12 @@ namespace MeshTool.UI.Rendering
                 if (_pointCount > _pointCapacity)
                 {
                     _pointCapacity = Math.Max(_pointCapacity * 2, _pointCount + 10000);
-                    if (_pointInstanceBuffer!.EnsureCapacity(_pointCapacity))
-                    {
-                        _vboInstances = _pointInstanceBuffer.Handle;
-                        RebindPointVaos();
-                    }
+                    _pointRenderer!.EnsureCapacity(_pointCapacity);
                 }
 
                 if (_pointCount > 0)
                 {
-                    Console.WriteLine($"[GL] Uploading {_pointCount} points to GPU...");
-                    int pointFloatCount = _pointCount * 8;
-                    float[] vertices = ArrayPool<float>.Shared.Rent(pointFloatCount);
-                    try
-                    {
-                        for (int i = 0; i < _pointCount; i++)
-                        {
-                            float nx = (float)points[i].Normal.X;
-                            float ny = (float)points[i].Normal.Y;
-                            float nz = (float)points[i].Normal.Z;
-                            float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
-                            if (nLen > 0.00001f)
-                            {
-                                nx /= nLen;
-                                ny /= nLen;
-                                nz /= nLen;
-                            }
-                            else
-                            {
-                                nx = 0f;
-                                ny = 1f;
-                                nz = 0f;
-                            }
-
-                            vertices[i * 8 + 0] = (float)points[i].Position.X;
-                            vertices[i * 8 + 1] = (float)points[i].Position.Y;
-                            vertices[i * 8 + 2] = (float)points[i].Position.Z;
-                            vertices[i * 8 + 3] = nx;
-                            vertices[i * 8 + 4] = ny;
-                            vertices[i * 8 + 5] = nz;
-                            vertices[i * 8 + 6] = points[i].SpawnTime;
-                            vertices[i * 8 + 7] = _selectedPointIndices.Contains(i) ? 1f : 0f;
-
-                            if (points[i].Position.Y < _minPointY) _minPointY = (float)points[i].Position.Y;
-                            if (points[i].Position.Y > _maxPointY) _maxPointY = (float)points[i].Position.Y;
-                        }
-
-                        _pointInstanceBuffer!.UploadSubData(vertices, 0, _pointCount);
-                    }
-                    finally
-                    {
-                        ArrayPool<float>.Shared.Return(vertices);
-                    }
+                    _pointRenderer!.UploadPoints(points, _pointCount, _selectedPointIndices, ref _minPointY, ref _maxPointY);
                 }
 
                 if (_rayCount > _rayCapacity)
@@ -627,57 +468,11 @@ namespace MeshTool.UI.Rendering
                     {
                         // Reallocate and copy old data
                         int newCapacity = Math.Max(_pointCapacity * 2, newPointCount + 10000);
-                        if (_pointInstanceBuffer!.EnsureCapacity(newCapacity))
-                        {
-                            _vboInstances = _pointInstanceBuffer.Handle;
-                            RebindPointVaos();
-                        }
+                        _pointRenderer!.EnsureCapacity(newCapacity);
                         _pointCapacity = newCapacity;
                     }
 
-                    int pointFloatCount = addedPoints * 8;
-                    float[] vertices = ArrayPool<float>.Shared.Rent(pointFloatCount);
-                    try
-                    {
-                        for (int i = 0; i < addedPoints; i++)
-                        {
-                            float nx = (float)newPoints![i].Normal.X;
-                            float ny = (float)newPoints[i].Normal.Y;
-                            float nz = (float)newPoints[i].Normal.Z;
-                            float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
-                            if (nLen > 0.00001f)
-                            {
-                                nx /= nLen;
-                                ny /= nLen;
-                                nz /= nLen;
-                            }
-                            else
-                            {
-                                nx = 0f;
-                                ny = 1f;
-                                nz = 0f;
-                            }
-
-                            int pointIndex = _pointCount + i;
-                            vertices[i * 8 + 0] = (float)newPoints[i].Position.X;
-                            vertices[i * 8 + 1] = (float)newPoints[i].Position.Y;
-                            vertices[i * 8 + 2] = (float)newPoints[i].Position.Z;
-                            vertices[i * 8 + 3] = nx;
-                            vertices[i * 8 + 4] = ny;
-                            vertices[i * 8 + 5] = nz;
-                            vertices[i * 8 + 6] = newPoints[i].SpawnTime;
-                            vertices[i * 8 + 7] = _selectedPointIndices.Contains(pointIndex) ? 1f : 0f;
-
-                            if (newPoints[i].Position.Y < _minPointY) _minPointY = (float)newPoints[i].Position.Y;
-                            if (newPoints[i].Position.Y > _maxPointY) _maxPointY = (float)newPoints[i].Position.Y;
-                        }
-
-                        _pointInstanceBuffer!.UploadSubData(vertices, _pointCount, addedPoints);
-                    }
-                    finally
-                    {
-                        ArrayPool<float>.Shared.Return(vertices);
-                    }
+                    _pointRenderer!.AppendPoints(newPoints, _pointCount, _selectedPointIndices, ref _minPointY, ref _maxPointY);
                     _pointCount = newPointCount;
                     _allPoints.AddRange(newPoints);
                 }
@@ -735,46 +530,7 @@ namespace MeshTool.UI.Rendering
 
                 if (_pointCount > 0)
                 {
-                    int pointFloatCount = _pointCount * 8;
-                    float[] vertices = ArrayPool<float>.Shared.Rent(pointFloatCount);
-                    try
-                    {
-                        for (int i = 0; i < _pointCount; i++)
-                        {
-                            var p = _allPoints[i];
-                            float nx = (float)p.Normal.X;
-                            float ny = (float)p.Normal.Y;
-                            float nz = (float)p.Normal.Z;
-                            float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
-                            if (nLen > 0.00001f)
-                            {
-                                nx /= nLen;
-                                ny /= nLen;
-                                nz /= nLen;
-                            }
-                            else
-                            {
-                                nx = 0f;
-                                ny = 1f;
-                                nz = 0f;
-                            }
-
-                            vertices[i * 8 + 0] = (float)p.Position.X;
-                            vertices[i * 8 + 1] = (float)p.Position.Y;
-                            vertices[i * 8 + 2] = (float)p.Position.Z;
-                            vertices[i * 8 + 3] = nx;
-                            vertices[i * 8 + 4] = ny;
-                            vertices[i * 8 + 5] = nz;
-                            vertices[i * 8 + 6] = p.SpawnTime;
-                            vertices[i * 8 + 7] = _selectedPointIndices.Contains(i) ? 1f : 0f;
-                        }
-
-                        _pointInstanceBuffer!.UploadSubData(vertices, 0, _pointCount);
-                    }
-                    finally
-                    {
-                        ArrayPool<float>.Shared.Return(vertices);
-                    }
+                    _pointRenderer!.UploadSelectionState(_allPoints, _pointCount, _selectedPointIndices);
                 }
             }
 
@@ -827,60 +583,13 @@ namespace MeshTool.UI.Rendering
             // 1. Draw Points
             if (_viewport.ShowPoints && _pointCount > 0)
             {
-                _gl.UseProgram(_shaderProgramPoints!.Handle);
-                SetUniforms(_shaderProgramPoints, view, proj);
-
-                _gl.BindVertexArray(_vaoPoints);
-                _gl.PointSize(4.0f);
-
-                // Force unbind element array buffer in case it was bound elsewhere
-                _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, 0);
-
-                int dynColLocP = _shaderProgramPoints.GetUniformLocation("uUseDynamicColor");
-                _gl.Uniform1(dynColLocP, UseDynamicColorMapping ? 1.0f : 0.0f);
-
-                int minLocP = _shaderProgramPoints.GetUniformLocation("uWorldMinY");
-                int maxLocP = _shaderProgramPoints.GetUniformLocation("uWorldMaxY");
-                _gl.Uniform1(minLocP, _minPointY);
-                _gl.Uniform1(maxLocP, _maxPointY);
-
-                _gl.DrawArrays(PrimitiveType.Points, 0, (uint)_pointCount);
+                _pointRenderer!.RenderPoints(view, proj, _pointCount, UseDynamicColorMapping, _minPointY, _maxPointY);
             }
 
             // 2. Draw Surfels
             if (_viewport.ShowSurfels && _pointCount > 0)
             {
-                _gl.UseProgram(_shaderProgramSurfels!.Handle);
-                SetUniforms(_shaderProgramSurfels, view, proj);
-
-                int scaleLoc = _shaderProgramSurfels.GetUniformLocation("uScale");
-                _gl.Uniform1(scaleLoc, _avgDistance * 0.5f * _viewport.SurfelScale);
-
-                int timeLoc = _shaderProgramSurfels.GetUniformLocation("uCurrentTime");
-                _gl.Uniform1(timeLoc, currentTime);
-
-                int hasHoveredLoc = _shaderProgramSurfels.GetUniformLocation("uHasHovered");
-                int hoveredPosLoc = _shaderProgramSurfels.GetUniformLocation("uHoveredPos");
-                if (HoveredCoordinate.HasValue)
-                {
-                    _gl.Uniform1(hasHoveredLoc, 1.0f);
-                    _gl.Uniform3(hoveredPosLoc, (float)HoveredCoordinate.Value.X, (float)HoveredCoordinate.Value.Y, (float)HoveredCoordinate.Value.Z);
-                }
-                else
-                {
-                    _gl.Uniform1(hasHoveredLoc, 0.0f);
-                }
-
-                int dynColLoc = _shaderProgramSurfels.GetUniformLocation("uUseDynamicColor");
-                _gl.Uniform1(dynColLoc, UseDynamicColorMapping ? 1.0f : 0.0f);
-
-                int minLoc = _shaderProgramSurfels.GetUniformLocation("uWorldMinY");
-                int maxLoc = _shaderProgramSurfels.GetUniformLocation("uWorldMaxY");
-                _gl.Uniform1(minLoc, _minPointY);
-                _gl.Uniform1(maxLoc, _maxPointY);
-
-                _gl.BindVertexArray(_vaoSurfels);
-                _gl.DrawArraysInstanced(PrimitiveType.Triangles, 0, (uint)_surfelVertexCount, (uint)_pointCount);
+                _pointRenderer!.RenderSurfels(view, proj, _pointCount, _avgDistance, _viewport.SurfelScale, currentTime, HoveredCoordinate, UseDynamicColorMapping, _minPointY, _maxPointY);
             }
 
             // 3. Draw Mesh
