@@ -12,9 +12,6 @@ namespace MeshTool.UI.Rendering
 {
     public class SceneRenderer
     {
-        private const int FineDensityPreviewTargetPoints = 36000;
-        private const float FineDensityPreviewAdjustRate = 0.35f;
-        private const float ScanDensityRebuildMoveThreshold = 24f;
         private const int AxesVertexStride = 6 * sizeof(float);
         private float _fineDensityPreviewRadius = 3200f;
         private GL _gl;
