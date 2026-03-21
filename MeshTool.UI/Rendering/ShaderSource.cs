@@ -680,21 +680,59 @@ namespace MeshTool.UI.Rendering
             uniform mat4 uProjection;
             uniform vec3 uCameraPos;
             uniform float uGridPlaneY;
-            uniform float uGridSpacingMinor;
-            uniform float uGridSpacingMajor0;
-            uniform float uGridSpacingMajor1;
-            uniform vec2 uGridPhaseMinor;
-            uniform vec2 uGridPhaseMajor0;
-            uniform vec2 uGridPhaseMajor1;
-            uniform float uGridFade;
+            const int GRID_TIER_COUNT = 14;
+            const float GRID_MIN_SPACING = 0.001;
+            uniform float uGridCameraHeight;
             uniform float uGridFadeStart;
             uniform float uGridFadeEnd;
+            float GridFootprint(vec2 localXZ, float spacing, vec2 phase) {
+                vec2 uv = (localXZ + phase) / spacing;
+                vec2 deriv = max(fwidth(uv), vec2(1e-6));
+                return max(deriv.x, deriv.y);
+            }
+
             float GridLineAA(vec2 localXZ, float spacing, vec2 phase, float lineWidthPx) {
                 vec2 uv = (localXZ + phase) / spacing;
                 vec2 deriv = max(fwidth(uv), vec2(1e-6));
                 vec2 distToLine = abs(fract(uv - 0.5) - 0.5) / deriv;
                 float lineDist = min(distToLine.x, distToLine.y);
-                return 1.0 - smoothstep(lineWidthPx, lineWidthPx + 1.0, lineDist);
+                float aaWidth = 1.0 + clamp(max(deriv.x, deriv.y) * 0.85, 0.0, 2.5);
+                return 1.0 - smoothstep(lineWidthPx, lineWidthPx + aaWidth, lineDist);
+            }
+
+            float GridFadeOut(float footprint, float startFootprint, float endFootprint) {
+                return 1.0 - smoothstep(startFootprint, endFootprint, footprint);
+            }
+
+            float GridHeightLogRatio(float cameraHeight, float spacing) {
+                float ratio = cameraHeight / max(spacing, 1e-4);
+                return log2(max(ratio, 1e-6)) / log2(10.0);
+            }
+
+            float GridHeightWeight(float cameraHeight, float spacing) {
+                float logRatio = GridHeightLogRatio(cameraHeight, spacing);
+                float coarseFadeIn = smoothstep(-3.3, -1.4, logRatio);
+                float fineFadeOut = 1.0 - smoothstep(0.9, 2.1, logRatio);
+                return coarseFadeIn * fineFadeOut;
+            }
+
+            float GridTierStrength(float cameraHeight, float spacing, float horizonBlend) {
+                float logRatio = GridHeightLogRatio(cameraHeight, spacing);
+                float coarseFactor = 1.0 - smoothstep(-0.2, 1.2, logRatio);
+                float nearStrength = mix(0.026, 0.108, coarseFactor);
+                float horizonStrength = mix(nearStrength * 0.28, nearStrength, horizonBlend);
+                return horizonStrength;
+            }
+
+            float GridTierWidth(float cameraHeight, float spacing, float widthScale) {
+                float logRatio = GridHeightLogRatio(cameraHeight, spacing);
+                float coarseFactor = 1.0 - smoothstep(-0.2, 1.2, logRatio);
+                return mix(0.30, 0.96, coarseFactor) * widthScale;
+            }
+
+            float GridDistanceWeight(float hitDistance, float spacing) {
+                float distanceRatio = hitDistance / max(spacing, 1e-4);
+                return 1.0 - smoothstep(5.0, 30.0, distanceRatio);
             }
         ";
 
@@ -725,30 +763,38 @@ namespace MeshTool.UI.Rendering
 
                 vec3 hitPosView = rayDirView * t;
                 vec2 localXZ = rayDirWorld.xz * t;
+                vec2 worldXZ = localXZ + uCameraPos.xz;
 
                 vec4 clip_space_pos = uProjection * vec4(hitPosView, 1.0);
                 if (clip_space_pos.w <= 0.0) discard;
                 float ndc_z = clip_space_pos.z / clip_space_pos.w;
                 gl_FragDepth = clamp((ndc_z + 1.0) * 0.5, 0.0, 1.0);
 
-                float fade = clamp(uGridFade, 0.0, 1.0);
-                float widthPx = 1.0;
-                float minor = GridLineAA(localXZ, uGridSpacingMinor, uGridPhaseMinor, widthPx);
-                float major0 = GridLineAA(localXZ, uGridSpacingMajor0, uGridPhaseMajor0, widthPx);
-                float major1 = GridLineAA(localXZ, uGridSpacingMajor1, uGridPhaseMajor1, widthPx);
+                float hitDistance = length(localXZ);
+                float horizonBlend = smoothstep(0.028, 0.18, absRayY);
+                float distanceFade = 1.0 - smoothstep(uGridFadeStart, uGridFadeEnd, hitDistance);
+                float widthScale = mix(0.18, 1.0, horizonBlend);
 
-                float wMinor = 0.08;
-                float wMajor = 0.30;
-                float aMinor = minor * ((1.0 - fade) * wMinor);
-                float aMajor0 = major0 * (((1.0 - fade) * wMajor) + (fade * wMinor));
-                float aMajor1 = major1 * (fade * wMajor);
-                float gridAlpha = clamp(aMinor + aMajor0 + aMajor1, 0.0, 0.55);
+                float gridAlpha = 0.0;
+                for (int i = 0; i < GRID_TIER_COUNT; ++i) {
+                    float spacing = GRID_MIN_SPACING * pow(10.0, float(i));
+                    vec2 phase = vec2(0.0);
+                    float aliasStart = 0.85 + (0.08 * float(i));
+                    float aliasEnd = aliasStart + 1.0;
+                    float aliasWeight = GridFadeOut(GridFootprint(worldXZ, spacing, phase), aliasStart, aliasEnd);
+                    float distanceWeight = GridDistanceWeight(hitDistance, spacing);
+                    float heightWeight = GridHeightWeight(uGridCameraHeight, spacing);
+                    float line = GridLineAA(worldXZ, spacing, phase, GridTierWidth(uGridCameraHeight, spacing, widthScale));
+                    float tierAlpha = line * aliasWeight * distanceWeight * heightWeight * GridTierStrength(uGridCameraHeight, spacing, horizonBlend);
+                    gridAlpha += tierAlpha;
+                }
+                gridAlpha = clamp(gridAlpha * 1.12, 0.0, 0.27);
 
-                vec3 gridColor = vec3(0.4, 0.4, 0.4);
+                vec3 gridColor = vec3(0.40, 0.40, 0.41);
                 vec4 finalColor = vec4(gridColor, gridAlpha);
 
-                float horizonFade = smoothstep(0.01, 0.03, absRayY);
-                finalColor.a *= horizonFade;
+                float horizonFade = smoothstep(0.012, 0.16, absRayY);
+                finalColor.a *= horizonFade * distanceFade;
                 if (finalColor.a < 0.001) discard;
 
                 float z = gl_FragDepth;
@@ -783,29 +829,37 @@ namespace MeshTool.UI.Rendering
 
                 vec3 hitPosView = rayDirView * t;
                 vec2 localXZ = rayDirWorld.xz * t;
+                vec2 worldXZ = localXZ + uCameraPos.xz;
 
                 vec4 clip_space_pos = uProjection * vec4(hitPosView, 1.0);
                 if (clip_space_pos.w <= 0.0) discard;
                 float ndc_z = clip_space_pos.z / clip_space_pos.w;
                 gl_FragDepth = clamp((ndc_z + 1.0) * 0.5, 0.0, 1.0);
 
-                float fade = clamp(uGridFade, 0.0, 1.0);
-                float widthPx = 1.0;
-                float minor = GridLineAA(localXZ, uGridSpacingMinor, uGridPhaseMinor, widthPx);
-                float major0 = GridLineAA(localXZ, uGridSpacingMajor0, uGridPhaseMajor0, widthPx);
-                float major1 = GridLineAA(localXZ, uGridSpacingMajor1, uGridPhaseMajor1, widthPx);
+                float hitDistance = length(localXZ);
+                float horizonBlend = smoothstep(0.028, 0.18, absRayY);
+                float distanceFade = 1.0 - smoothstep(uGridFadeStart, uGridFadeEnd, hitDistance);
+                float widthScale = mix(0.18, 1.0, horizonBlend);
 
-                float wMinor = 0.08;
-                float wMajor = 0.30;
-                float aMinor = minor * ((1.0 - fade) * wMinor);
-                float aMajor0 = major0 * (((1.0 - fade) * wMajor) + (fade * wMinor));
-                float aMajor1 = major1 * (fade * wMajor);
-                float gridAlpha = clamp(aMinor + aMajor0 + aMajor1, 0.0, 0.55);
+                float gridAlpha = 0.0;
+                for (int i = 0; i < GRID_TIER_COUNT; ++i) {
+                    float spacing = GRID_MIN_SPACING * pow(10.0, float(i));
+                    vec2 phase = vec2(0.0);
+                    float aliasStart = 0.85 + (0.08 * float(i));
+                    float aliasEnd = aliasStart + 1.0;
+                    float aliasWeight = GridFadeOut(GridFootprint(worldXZ, spacing, phase), aliasStart, aliasEnd);
+                    float distanceWeight = GridDistanceWeight(hitDistance, spacing);
+                    float heightWeight = GridHeightWeight(uGridCameraHeight, spacing);
+                    float line = GridLineAA(worldXZ, spacing, phase, GridTierWidth(uGridCameraHeight, spacing, widthScale));
+                    float tierAlpha = line * aliasWeight * distanceWeight * heightWeight * GridTierStrength(uGridCameraHeight, spacing, horizonBlend);
+                    gridAlpha += tierAlpha;
+                }
+                gridAlpha = clamp(gridAlpha * 1.12, 0.0, 0.27);
 
                 vec4 finalColor = vec4(1.0, 1.0, 1.0, gridAlpha);
 
-                float horizonFade = smoothstep(0.01, 0.03, absRayY);
-                finalColor.a *= horizonFade;
+                float horizonFade = smoothstep(0.012, 0.16, absRayY);
+                finalColor.a *= horizonFade * distanceFade;
                 if (finalColor.a < 0.001) discard;
 
                 FragColor = vec4(finalColor.a, finalColor.a, finalColor.a, finalColor.a);

@@ -94,44 +94,13 @@ namespace MeshTool.UI.Rendering
             _gl.Uniform1(program.GetUniformLocation("uGridPlaneY"), gridPlaneY);
 
             double camHeight = Math.Max(Math.Abs((double)(camPos.Y - gridPlaneY)), 0.0001);
-            double lod = Math.Log10(Math.Max(camHeight, 1.0));
-            double expBase = Math.Floor(lod);
-            float fade = (float)(lod - expBase);
-            float spacingMajor0 = (float)Math.Pow(10.0, expBase);
-            float spacingMajor1 = spacingMajor0 * 10.0f;
-            float spacingMinor = spacingMajor0 * 0.1f;
-
-            float phaseMinorX = PositiveModulo(camPos.X, spacingMinor);
-            float phaseMinorZ = PositiveModulo(camPos.Z, spacingMinor);
-            float phaseMajor0X = PositiveModulo(camPos.X, spacingMajor0);
-            float phaseMajor0Z = PositiveModulo(camPos.Z, spacingMajor0);
-            float phaseMajor1X = PositiveModulo(camPos.X, spacingMajor1);
-            float phaseMajor1Z = PositiveModulo(camPos.Z, spacingMajor1);
-
-            _gl.Uniform1(program.GetUniformLocation("uGridSpacingMinor"), spacingMinor);
-            _gl.Uniform1(program.GetUniformLocation("uGridSpacingMajor0"), spacingMajor0);
-            _gl.Uniform1(program.GetUniformLocation("uGridSpacingMajor1"), spacingMajor1);
-            _gl.Uniform2(program.GetUniformLocation("uGridPhaseMinor"), phaseMinorX, phaseMinorZ);
-            _gl.Uniform2(program.GetUniformLocation("uGridPhaseMajor0"), phaseMajor0X, phaseMajor0Z);
-            _gl.Uniform2(program.GetUniformLocation("uGridPhaseMajor1"), phaseMajor1X, phaseMajor1Z);
-            _gl.Uniform1(program.GetUniformLocation("uGridFade"), fade);
+            _gl.Uniform1(program.GetUniformLocation("uGridCameraHeight"), (float)camHeight);
 
             float baseFadeStart = 85000.0f;
             float camHeightFadeStart = Math.Abs(camPos.Y - gridPlaneY) * 12.0f;
             float fadeStart = MathF.Max(baseFadeStart, camHeightFadeStart);
             _gl.Uniform1(program.GetUniformLocation("uGridFadeStart"), fadeStart);
             _gl.Uniform1(program.GetUniformLocation("uGridFadeEnd"), fadeStart * 1.15f);
-        }
-
-        private static float PositiveModulo(float value, float modulus)
-        {
-            if (modulus <= 0.0f)
-            {
-                return 0.0f;
-            }
-
-            float result = value % modulus;
-            return result < 0.0f ? result + modulus : result;
         }
 
         public void Dispose()
