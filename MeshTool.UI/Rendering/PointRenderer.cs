@@ -15,7 +15,6 @@ namespace MeshTool.UI.Rendering
         private const int PointInstanceStride = 8 * sizeof(float);
 
         private readonly GL _gl;
-        private readonly Action<string>? _log;
         private readonly ShaderProgram _pointsProgram;
         private readonly ShaderProgram _surfelsProgram;
         private readonly DynamicBuffer _instanceBuffer;
@@ -28,8 +27,7 @@ namespace MeshTool.UI.Rendering
         public PointRenderer(GL gl, Action<string>? log)
         {
             _gl = gl;
-            _log = log;
-            _pointsProgram = new ShaderProgram(_gl, "Point", ShaderSource.PointVertex, ShaderSource.PointFragment, _log);
+            _pointsProgram = new ShaderProgram(_gl, "Point", ShaderSource.PointVertex, ShaderSource.PointFragment, log);
 
             string fsSurfel = @"#version 300 es
                 precision highp float;
@@ -42,7 +40,7 @@ namespace MeshTool.UI.Rendering
                     vec3 diffuse = diff * Color + vec3(0.1, 0.1, 0.3);
                     FragColor = vec4(diffuse, 1.0);
                 }";
-            _surfelsProgram = new ShaderProgram(_gl, "Surfel", ShaderSource.SurfelVertex, fsSurfel, _log);
+            _surfelsProgram = new ShaderProgram(_gl, "Surfel", ShaderSource.SurfelVertex, fsSurfel, log);
             _instanceBuffer = new DynamicBuffer(_gl, PointInstanceStride);
 
             _vaoPoints = _gl.GenVertexArray();
@@ -101,8 +99,6 @@ namespace MeshTool.UI.Rendering
             }
         }
 
-        public uint PointsVaoHandle => _vaoPoints;
-        public uint SurfelsVaoHandle => _vaoSurfels;
         public int SurfelVertexCount => _surfelVertexCount;
 
         public bool EnsureCapacity(int capacity)

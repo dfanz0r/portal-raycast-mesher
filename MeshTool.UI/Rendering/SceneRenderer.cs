@@ -19,7 +19,7 @@ namespace MeshTool.UI.Rendering
         private float _fineDensityPreviewRadius = 3200f;
         private GL _gl;
         private OpenGlViewport _viewport;
-        private ShaderProgram? _shaderProgramAxes, _shaderProgramFlatColor;
+        private ShaderProgram? _shaderProgramAxes;
         private uint _vaoRays;
         private uint _vaoAxes, _vboAxes;
         private VertexArray? _axesBuffer;
@@ -110,14 +110,6 @@ namespace MeshTool.UI.Rendering
             string fsAxes = ShaderSource.AxesFragment;
             _shaderProgramAxes = new ShaderProgram(_gl, "Axes", vsAxes, fsAxes, _viewport.OnLog);
 
-            string vsFlatColor = ShaderSource.FlatColorVertex;
-            string fsFlatColor = ShaderSource.FlatColorFragment;
-            _shaderProgramFlatColor = new ShaderProgram(_gl, "FlatColor", vsFlatColor, fsFlatColor, _viewport.OnLog);
-        }
-
-        private unsafe void SetUniforms(ShaderProgram program, Matrix4X4<float> view, Matrix4X4<float> proj)
-        {
-            program.SetViewProjection(view, proj);
         }
 
         private unsafe void InitBuffers()
@@ -163,7 +155,6 @@ namespace MeshTool.UI.Rendering
             _vaoAxes = 0;
             _vboAxes = 0;
             _shaderProgramAxes?.Dispose();
-            _shaderProgramFlatColor?.Dispose();
             _gl.Dispose();
         }
 
@@ -602,7 +593,7 @@ namespace MeshTool.UI.Rendering
             if (_viewport.ShowGrid)
             {
                 _gl.UseProgram(_shaderProgramAxes!.Handle);
-                SetUniforms(_shaderProgramAxes, view, proj);
+                _shaderProgramAxes.SetViewProjection(view, proj);
 
                 _gl.BindVertexArray(_vaoAxes);
                 _gl.DrawArrays(PrimitiveType.Lines, 0, 6);
