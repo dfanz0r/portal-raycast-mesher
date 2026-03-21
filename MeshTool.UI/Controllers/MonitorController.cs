@@ -14,6 +14,7 @@ namespace MeshTool.UI.Controllers
         private CancellationTokenSource? _cts;
         private Task? _monitorTask;
         private bool _isRunning;
+        private bool _stopNotified;
 
         /// <summary>
         /// Gets whether the monitor is currently running.
@@ -31,6 +32,11 @@ namespace MeshTool.UI.Controllers
         public event Action? Stopped;
 
         /// <summary>
+        /// Raised when a monitor update is received.
+        /// </summary>
+        public event Action<MonitorUpdate>? Updated;
+
+        /// <summary>
         /// Raised when an error occurs.
         /// </summary>
         public event Action<string>? Error;
@@ -38,29 +44,61 @@ namespace MeshTool.UI.Controllers
         /// <summary>
         /// Starts the monitor.
         /// </summary>
-        public async Task StartAsync(string logPath, string dbPath, MonitorRunOptions options)
+        public Task StartAsync(string logPath, string dbPath, MonitorRunOptions options)
         {
             if (_isRunning)
             {
                 Error?.Invoke("Monitor is already running.");
-                return;
+                return Task.CompletedTask;
             }
 
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
             _isRunning = true;
+            _stopNotified = false;
             Started?.Invoke();
 
-            _monitorTask = MonitorRunner.RunAsync(logPath, dbPath, token, options);
+            var effectiveOptions = new MonitorRunOptions
+            {
+                StartAtEnd = options.StartAtEnd,
+                ChannelCapacity = options.ChannelCapacity,
+                FlushInterval = options.FlushInterval,
+                FlushThreshold = options.FlushThreshold,
+                SaveDebounce = options.SaveDebounce,
+                SaveMinInterval = options.SaveMinInterval,
+                SaveMaxInterval = options.SaveMaxInterval,
+                IncludeSnapshots = options.IncludeSnapshots,
+                SnapshotMinInterval = options.SnapshotMinInterval,
+                Log = options.Log,
+                OnUpdate = update =>
+                {
+                    options.OnUpdate?.Invoke(update);
+                    Updated?.Invoke(update);
+                }
+            };
 
-            _ = _monitorTask.ContinueWith(_ =>
+            _monitorTask = MonitorRunner.RunAsync(logPath, dbPath, token, effectiveOptions);
+
+            _ = _monitorTask.ContinueWith(task =>
             {
                 _isRunning = false;
-                Stopped?.Invoke();
+                if (!_stopNotified)
+                {
+                    _stopNotified = true;
+                    Stopped?.Invoke();
+                }
+
+                if (task.IsFaulted && task.Exception != null)
+                {
+                    Error?.Invoke(task.Exception.GetBaseException().Message);
+                }
+
                 _monitorTask = null;
                 _cts?.Dispose();
                 _cts = null;
             });
+
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -79,7 +117,7 @@ namespace MeshTool.UI.Controllers
                 {
                     await _monitorTask;
                 }
-                catch
+                catch (OperationCanceledException)
                 {
                     // Ignore cancellation exceptions
                 }
@@ -89,7 +127,11 @@ namespace MeshTool.UI.Controllers
             _cts?.Dispose();
             _cts = null;
             _isRunning = false;
-            Stopped?.Invoke();
+            if (!_stopNotified)
+            {
+                _stopNotified = true;
+                Stopped?.Invoke();
+            }
         }
 
         /// <summary>

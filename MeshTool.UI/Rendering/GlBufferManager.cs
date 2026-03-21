@@ -79,6 +79,15 @@ namespace MeshTool.UI.Rendering
             _gl.EnableVertexAttribArray(location);
         }
 
+        public unsafe void SetAttribute(uint bufferHandle, uint location, int size, VertexAttribPointerType type, int stride, int offset, bool normalized = false, uint divisor = 0)
+        {
+            Bind();
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, bufferHandle);
+            _gl.VertexAttribPointer(location, size, type, normalized, (uint)stride, (void*)offset);
+            _gl.EnableVertexAttribArray(location);
+            _gl.VertexAttribDivisor(location, divisor);
+        }
+
         /// <summary>
         /// Sets a vertex attribute pointer with instancing.
         /// </summary>
@@ -146,24 +155,8 @@ namespace MeshTool.UI.Rendering
         }
 
         /// <summary>
-        /// Ensures the buffer has at least the specified capacity.
-        /// </summary>
-        /// <param name="capacity">Required capacity in vertices.</param>
-        /// <param name="currentCount">Current vertex count to preserve.</param>
-        /// <returns>True if the buffer was reallocated.</returns>
-        public bool EnsureCapacity(int capacity, int currentCount = 0)
-        {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(VertexArray));
-
-            // We can't easily check current capacity, so we use a heuristic
-            // This should be called when we know we need more space
-            return false; // Caller should handle reallocation
-        }
-
-        /// <summary>
-        /// Sets the vertex count without uploading data.
-        /// </summary>
+         /// Sets the vertex count without uploading data.
+         /// </summary>
         public void SetVertexCount(int count)
         {
             _vertexCount = count;

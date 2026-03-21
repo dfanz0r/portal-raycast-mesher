@@ -7,7 +7,6 @@ using Avalonia.Platform.Storage;
 using System;
 using System.Globalization;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 using MeshTool.Core.Algorithms;
 using MeshTool.Core.Config;
@@ -22,9 +21,6 @@ public partial class MainWindow : Window
 {
     private string _dbPath = string.Empty;
     private readonly string _logPath;
-
-    private CancellationTokenSource? _monitorCts;
-    private Task? _monitorTask;
     private readonly System.Collections.ObjectModel.ObservableCollection<string> _logLines = new();
     private readonly System.Collections.ObjectModel.ObservableCollection<string> _dbFiles = new();
 
@@ -34,7 +30,6 @@ public partial class MainWindow : Window
     private bool _scanHandleDragging = false;
     private string _scanHandleKey = string.Empty;
     private Point _scanHandleLastPoint;
-    private bool _isSyncingScanControls = false;
     private bool _scanBoundsEditingEnabled = true;
     private bool _monitorRenderOverridesActive = false;
     private int _selectedPointCount = 0;
@@ -46,18 +41,30 @@ public partial class MainWindow : Window
     private bool _preMonitorShowMissRays;
     private bool _preMonitorShowDensityPreview;
     private bool _preMonitorShowVolume;
-    private const float MinProbeCell = 64f;
-    private const float MaxProbeCell = 768f;
-    private const float MinFineStep = 8f;
-    private const float MaxFineStep = 96f;
-    private float _finePhaseTargetStep = 24f;
 
     // Controllers
+    private readonly DatabaseController _databaseController = new();
+    private readonly ScanVolumeController _scanVolumeController;
+    private readonly MonitorController _monitorController = new();
     private readonly SelectionManager _selectionManager = new();
 
     public MainWindow()
     {
         InitializeComponent();
+
+        _scanVolumeController = new ScanVolumeController(
+            TxtScanCenterX,
+            TxtScanCenterZ,
+            TxtScanSizeX,
+            TxtScanSizeZ,
+            TxtScanYTop,
+            TxtScanYBottom,
+            TxtScanYaw,
+            TxtScanRayTilt,
+            SldScanDensity,
+            SldFineDensity,
+            TxtBroadDensityMeters,
+            TxtFineDensityMeters);
 
         // Initialize logger with file output
         InitializeLogger();
@@ -71,6 +78,27 @@ public partial class MainWindow : Window
         Viewport.OnToggleSelectionModeRequested = OnToggleSelectionModeRequested;
         LstConsole.ItemsSource = _logLines;
         CmbDbPath.ItemsSource = _dbFiles;
+
+        _scanVolumeController.ScanVolumeChanged += settings => Viewport.SetScanVolume(settings);
+        _scanVolumeController.FineDensityChanged += fineStep =>
+        {
+            Viewport.ScanFineTargetStep = fineStep;
+            Viewport.Invalidate();
+        };
+
+        _monitorController.Started += OnMonitorStarted;
+        _monitorController.Stopped += OnMonitorStopped;
+        _monitorController.Error += message => Log($"[ERROR] {message}");
+        _monitorController.Updated += update =>
+        {
+            if (update.NewPoints != null || update.NewMisses != null)
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    Viewport.AppendData(update.NewPoints, update.NewMisses, update.AvgDistance);
+                });
+            }
+        };
 
         _logPath = ResolvePortalLogPath();
 
@@ -178,6 +206,46 @@ public partial class MainWindow : Window
         Avalonia.Threading.Dispatcher.UIThread.Post(() => SyncScanControls(settings));
     }
 
+    private void OnMonitorStarted()
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            BtnMonitor.Content = "Stop Monitor";
+            BtnMesh.IsEnabled = false;
+            BtnBrowseDb.IsEnabled = false;
+            BtnNewDb.IsEnabled = false;
+            BtnClearDb.IsEnabled = false;
+            BtnGenerateMesh.IsEnabled = false;
+            BtnSaveMesh.IsEnabled = false;
+            ChkShowMesh.IsChecked = false;
+            ChkShowMesh.IsEnabled = false;
+            Viewport.PointSelectionModeEnabled = false;
+            SetScanEditingEnabled(false);
+            ChkPointSelectMode.IsEnabled = false;
+            BtnDeleteSelectedPoints.IsEnabled = false;
+            BtnClearSelectedPoints.IsEnabled = false;
+            BtnSelectionSave.IsEnabled = false;
+            BtnSelectionDiscard.IsEnabled = false;
+            ApplyMonitorRenderOverrides(true);
+        });
+    }
+
+    private void OnMonitorStopped()
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            BtnMonitor.Content = "Start Monitor";
+            BtnMesh.IsEnabled = true;
+            BtnBrowseDb.IsEnabled = true;
+            BtnNewDb.IsEnabled = true;
+            BtnClearDb.IsEnabled = true;
+            BtnGenerateMesh.IsEnabled = true;
+            UpdateMeshUiState();
+            ApplyInteractionMode();
+            ApplyMonitorRenderOverrides(false);
+        });
+    }
+
     private void OnSelectionCountChanged(int count)
     {
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
@@ -190,112 +258,20 @@ public partial class MainWindow : Window
 
     private void SyncScanControls(ScanVolumeSettings s)
     {
-        _isSyncingScanControls = true;
-        TxtScanCenterX.Text = s.CenterX.ToString("F1", CultureInfo.InvariantCulture);
-        TxtScanCenterZ.Text = s.CenterZ.ToString("F1", CultureInfo.InvariantCulture);
-        TxtScanSizeX.Text = s.SizeX.ToString("F1", CultureInfo.InvariantCulture);
-        TxtScanSizeZ.Text = s.SizeZ.ToString("F1", CultureInfo.InvariantCulture);
-        TxtScanYTop.Text = s.YTop.ToString("F1", CultureInfo.InvariantCulture);
-        TxtScanYBottom.Text = s.YBottom.ToString("F1", CultureInfo.InvariantCulture);
-        TxtScanYaw.Text = s.YawDegrees.ToString("F1", CultureInfo.InvariantCulture);
-        TxtScanRayTilt.Text = s.RayTiltDegrees.ToString("F1", CultureInfo.InvariantCulture);
-        SldScanDensity.Value = CellToDensity(s.ProbeCellSize);
-        SldFineDensity.Value = FineStepToDensity(_finePhaseTargetStep);
-        UpdateDensityMetersLabels(s.ProbeCellSize, _finePhaseTargetStep);
-        Viewport.ScanFineTargetStep = _finePhaseTargetStep;
-        _isSyncingScanControls = false;
-    }
-
-    private void UpdateDensityMetersLabels(float broadCellMeters, float fineStepMeters)
-    {
-        TxtBroadDensityMeters.Text = $"{MathF.Round(broadCellMeters)} m";
-        TxtFineDensityMeters.Text = $"{MathF.Round(fineStepMeters)} m";
-    }
-
-    private static double CellToDensity(float cell)
-    {
-        float clamped = Math.Clamp(cell, MinProbeCell, MaxProbeCell);
-        float t = (clamped - MinProbeCell) / (MaxProbeCell - MinProbeCell);
-        return 1.0 - t;
-    }
-
-    private static float DensityToCell(double density)
-    {
-        float d = (float)Math.Clamp(density, 0.0, 1.0);
-        float t = 1.0f - d;
-        return MinProbeCell + ((MaxProbeCell - MinProbeCell) * t);
-    }
-
-    private static double FineStepToDensity(float step)
-    {
-        float clamped = Math.Clamp(step, MinFineStep, MaxFineStep);
-        float t = (clamped - MinFineStep) / (MaxFineStep - MinFineStep);
-        return 1.0 - t;
-    }
-
-    private static float DensityToFineStep(double density)
-    {
-        float d = (float)Math.Clamp(density, 0.0, 1.0);
-        float t = 1.0f - d;
-        return MinFineStep + ((MaxFineStep - MinFineStep) * t);
-    }
-
-    private static bool TryParseFloat(TextBox box, out float value)
-    {
-        return float.TryParse(box.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
-    }
-
-    private bool TryReadScanSettingsFromUi(out ScanVolumeSettings settings, bool logErrors = true)
-    {
-        settings = Viewport.ScanVolume;
-
-        if (!TryParseFloat(TxtScanCenterX, out var cx) ||
-            !TryParseFloat(TxtScanCenterZ, out var cz) ||
-            !TryParseFloat(TxtScanSizeX, out var sx) ||
-            !TryParseFloat(TxtScanSizeZ, out var sz) ||
-            !TryParseFloat(TxtScanYTop, out var yTop) ||
-            !TryParseFloat(TxtScanYBottom, out var yBottom) ||
-            !TryParseFloat(TxtScanYaw, out var yaw) ||
-            !TryParseFloat(TxtScanRayTilt, out var tilt))
-        {
-            if (logErrors)
-            {
-                Log("[ERROR] Invalid scan volume values. Use numeric values only.");
-            }
-            return false;
-        }
-
-        float cell = Viewport.ScanVolume.ProbeCellSize;
-        settings = new ScanVolumeSettings(cx, cz, sx, sz, yTop, yBottom, yaw, tilt, cell).Sanitize();
-        return true;
+        _scanVolumeController.SyncToUi(s);
+        Viewport.ScanFineTargetStep = _scanVolumeController.FinePhaseTargetStep;
     }
 
     private void ScanVolumeField_TextChanged(object? sender, TextChangedEventArgs e)
     {
-        if (!_scanBoundsEditingEnabled) return;
-        if (_isSyncingScanControls) return;
-        if (!TryReadScanSettingsFromUi(out var settings, logErrors: false)) return;
-        Viewport.SetScanVolume(settings);
     }
 
     private void SldScanDensity_ValueChanged(object? sender, Avalonia.Controls.Primitives.RangeBaseValueChangedEventArgs e)
     {
-        if (!_scanBoundsEditingEnabled) return;
-        if (_isSyncingScanControls) return;
-        var s = Viewport.ScanVolume;
-        s = s with { ProbeCellSize = DensityToCell(e.NewValue) };
-        Viewport.SetScanVolume(s);
-        SyncScanControls(s);
     }
 
     private void SldFineDensity_ValueChanged(object? sender, Avalonia.Controls.Primitives.RangeBaseValueChangedEventArgs e)
     {
-        if (!_scanBoundsEditingEnabled) return;
-        if (_isSyncingScanControls) return;
-        _finePhaseTargetStep = DensityToFineStep(e.NewValue);
-        UpdateDensityMetersLabels(Viewport.ScanVolume.ProbeCellSize, _finePhaseTargetStep);
-        Viewport.ScanFineTargetStep = _finePhaseTargetStep;
-        Viewport.Invalidate();
     }
 
     private void BtnResetScanVolume_Click(object? sender, RoutedEventArgs e)
@@ -304,7 +280,8 @@ public partial class MainWindow : Window
         var defaults = ScanVolumeSettings.Default;
         Viewport.SetScanVolume(defaults);
         Viewport.ReframeToScanVolume();
-        SyncScanControls(defaults);
+        _scanVolumeController.SyncToUi(defaults);
+        Viewport.ScanFineTargetStep = _scanVolumeController.FinePhaseTargetStep;
         Log("[SCAN] Volume reset to defaults (12k x 12k).");
     }
 
@@ -332,24 +309,10 @@ public partial class MainWindow : Window
 
         bool fine = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
         bool coarse = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-        float unit = GetScanHandleStep(_scanHandleKey, fine, coarse);
+        float unit = ScanVolumeController.GetScanHandleStep(_scanHandleKey, fine, coarse);
         float delta = (float)(dx * unit);
 
-        var s = Viewport.ScanVolume;
-        switch (_scanHandleKey)
-        {
-            case "CenterX": s = s with { CenterX = s.CenterX + delta }; break;
-            case "CenterZ": s = s with { CenterZ = s.CenterZ + delta }; break;
-            case "SizeX": s = s with { SizeX = MathF.Max(10f, s.SizeX + delta) }; break;
-            case "SizeZ": s = s with { SizeZ = MathF.Max(10f, s.SizeZ + delta) }; break;
-            case "YTop": s = s with { YTop = s.YTop + delta }; break;
-            case "YBottom": s = s with { YBottom = s.YBottom + delta }; break;
-            case "Yaw": s = s with { YawDegrees = s.YawDegrees + delta }; break;
-            case "RayTilt": s = s with { RayTiltDegrees = s.RayTiltDegrees + delta }; break;
-            case "ProbeCell": s = s with { ProbeCellSize = MathF.Max(8f, s.ProbeCellSize + delta) }; break;
-        }
-
-        s = s.Sanitize();
+        var s = _scanVolumeController.ApplyDelta(Viewport.ScanVolume, _scanHandleKey, delta).Sanitize();
         Viewport.SetScanVolume(s);
         SyncScanControls(s);
 
@@ -369,27 +332,13 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private static float GetScanHandleStep(string key, bool fine, bool coarse)
-    {
-        float baseStep = key switch
-        {
-            "CenterX" or "CenterZ" => 1.0f,
-            "SizeX" or "SizeZ" => 2.0f,
-            "YTop" or "YBottom" => 1.0f,
-            "Yaw" => 0.2f,
-            "RayTilt" => 0.1f,
-            "ProbeCell" => 0.25f,
-            _ => 1.0f
-        };
-
-        if (fine) baseStep *= 0.1f;
-        if (coarse) baseStep *= 10f;
-        return baseStep;
-    }
-
     private async void BtnExportScanTs_Click(object? sender, RoutedEventArgs e)
     {
-        if (!TryReadScanSettingsFromUi(out var settings)) return;
+        if (!_scanVolumeController.TryReadSettingsFromUi(out var settings))
+        {
+            Log("[ERROR] Invalid scan volume values. Use numeric values only.");
+            return;
+        }
 
         var topLevel = TopLevel.GetTopLevel(this);
         if (topLevel == null) return;
@@ -433,7 +382,7 @@ public partial class MainWindow : Window
             ["Y_BOTTOM"] = s.YBottom.ToString("0.###", CultureInfo.InvariantCulture),
             ["INITIAL_PROBE_CELL_SIZE"] = s.ProbeCellSize.ToString("0.###", CultureInfo.InvariantCulture),
             ["INITIAL_PROBE_RADIUS"] = maxHalf.ToString("0.###", CultureInfo.InvariantCulture),
-            ["TARGET_STEP"] = MathF.Round(_finePhaseTargetStep).ToString("0", CultureInfo.InvariantCulture)
+            ["TARGET_STEP"] = MathF.Round(_scanVolumeController.FinePhaseTargetStep).ToString("0", CultureInfo.InvariantCulture)
         };
 
         foreach (var kv in tokens)
@@ -467,11 +416,11 @@ public partial class MainWindow : Window
         _dbFiles.Clear();
         try
         {
-            var files = Directory.GetFiles(Environment.CurrentDirectory, "*.db");
-            foreach (var f in files)
+            foreach (var entry in _databaseController.GetLocalDatabaseEntries(Environment.CurrentDirectory))
             {
-                _dbFiles.Add(Path.GetFileName(f));
+                _dbFiles.Add(entry);
             }
+
             if (_dbFiles.Count > 0)
             {
                 CmbDbPath.SelectedIndex = 0;
@@ -487,14 +436,7 @@ public partial class MainWindow : Window
     {
         if (CmbDbPath.SelectedItem is string selected)
         {
-            if (!Path.IsPathRooted(selected))
-            {
-                _dbPath = Path.Combine(Environment.CurrentDirectory, selected);
-            }
-            else
-            {
-                _dbPath = selected;
-            }
+            _dbPath = _databaseController.ResolveSelectedPath(selected, Environment.CurrentDirectory);
             _isDbLoaded = false;
             _cachedMesh = null;
             UpdateMeshUiState();
@@ -504,7 +446,11 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
-        _monitorCts?.Cancel();
+        if (_monitorController.IsRunning)
+        {
+            _ = _monitorController.StopAsync();
+        }
+
         Logger.Info("MeshTool UI closed");
         Logger.Shutdown();
         base.OnClosed(e);
@@ -554,7 +500,7 @@ public partial class MainWindow : Window
         if (files.Count >= 1)
         {
             _dbPath = files[0].Path.LocalPath;
-            string displayEntry = GetDbDisplayEntry(_dbPath);
+            string displayEntry = _databaseController.GetDisplayEntry(_dbPath, Environment.CurrentDirectory);
             if (!_dbFiles.Contains(displayEntry))
             {
                 _dbFiles.Add(displayEntry);
@@ -569,7 +515,7 @@ public partial class MainWindow : Window
 
     private async void BtnNewDb_Click(object sender, RoutedEventArgs e)
     {
-        if (_monitorTask != null)
+        if (_monitorController.IsRunning)
         {
             Log("[ERROR] Stop monitor before creating a new DB.");
             return;
@@ -595,9 +541,9 @@ public partial class MainWindow : Window
         try
         {
             string path = file.Path.LocalPath;
-            DatabaseIO.SaveDatabase(Array.Empty<Vertex>(), Array.Empty<Ray>(), path);
+            _databaseController.CreateEmptyDatabase(path);
 
-            string displayEntry = GetDbDisplayEntry(path);
+            string displayEntry = _databaseController.GetDisplayEntry(path, Environment.CurrentDirectory);
             if (!_dbFiles.Contains(displayEntry))
             {
                 _dbFiles.Add(displayEntry);
@@ -620,7 +566,7 @@ public partial class MainWindow : Window
 
     private async void BtnClearDb_Click(object? sender, RoutedEventArgs e)
     {
-        if (_monitorTask != null)
+        if (_monitorController.IsRunning)
         {
             Log("[ERROR] Stop monitor before clearing the DB.");
             return;
@@ -647,7 +593,7 @@ public partial class MainWindow : Window
 
         try
         {
-            DatabaseIO.SaveDatabase(Array.Empty<Vertex>(), Array.Empty<Ray>(), _dbPath);
+            _databaseController.ClearDatabase(_dbPath);
             _cachedMesh = null;
             _isDbLoaded = true;
             UpdateMeshUiState();
@@ -694,7 +640,7 @@ public partial class MainWindow : Window
     {
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            if (_monitorTask != null)
+            if (_monitorController.IsRunning)
             {
                 return;
             }
@@ -717,7 +663,7 @@ public partial class MainWindow : Window
 
     private void BtnDeleteSelectedPoints_Click(object? sender, RoutedEventArgs e)
     {
-        if (_monitorTask != null)
+        if (_monitorController.IsRunning)
         {
             Log("[ERROR] Stop monitor before deleting selected points.");
             return;
@@ -777,7 +723,7 @@ public partial class MainWindow : Window
         try
         {
             BtnSelectionSave.IsEnabled = false;
-            await Task.Run(() => DatabaseIO.SaveDatabase(_selectionManager.WorkingPoints, _loadedMisses, _dbPath));
+            await _databaseController.SaveSelectionAsync(_dbPath, _selectionManager.WorkingPoints, _loadedMisses);
 
             _selectionManager.SyncToLoadedPoints(_loadedPoints);
             _selectionManager.CommitChanges();
@@ -812,7 +758,7 @@ public partial class MainWindow : Window
 
     private void ApplyInteractionMode()
     {
-        bool monitorActive = _monitorTask != null;
+        bool monitorActive = _monitorController.IsRunning;
         bool selectionMode = !monitorActive && (ChkPointSelectMode.IsChecked ?? false);
 
         Viewport.PointSelectionModeEnabled = selectionMode;
@@ -890,25 +836,9 @@ public partial class MainWindow : Window
         return result;
     }
 
-    private static string GetDbDisplayEntry(string path)
-    {
-        string fullPath = Path.GetFullPath(path);
-        string cwd = Path.GetFullPath(Environment.CurrentDirectory)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        string dir = Path.GetDirectoryName(fullPath) ?? string.Empty;
-        dir = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        if (string.Equals(dir, cwd, StringComparison.OrdinalIgnoreCase))
-        {
-            return Path.GetFileName(fullPath);
-        }
-
-        return fullPath;
-    }
-
     private async void BtnGenerateMesh_Click(object sender, RoutedEventArgs e)
     {
-        if (_monitorTask != null)
+        if (_monitorController.IsRunning)
         {
             Log("[ERROR] Stop monitor before generating mesh.");
             return;
@@ -1091,7 +1021,7 @@ public partial class MainWindow : Window
 
     private async void BtnMesh_Click(object sender, RoutedEventArgs e)
     {
-        if (_monitorTask != null)
+        if (_monitorController.IsRunning)
         {
             Log("[ERROR] Stop monitor before Load Points & View.");
             return;
@@ -1120,133 +1050,22 @@ public partial class MainWindow : Window
 
     private async Task LoadDbAsync()
     {
-        await Task.Run(() =>
+        var result = await _databaseController.LoadForViewportAsync(_dbPath, Log);
+        if (result == null)
         {
-            Log($"[DB] Loading {_dbPath}");
-            DatabaseIO.LoadDatabase(_dbPath, out var masterPoints, out var masterMisses);
+            return;
+        }
 
-            // Loaded DB content should render as baseline data; only monitor-session additions animate as "new".
-            for (int i = 0; i < masterPoints.Count; i++)
-            {
-                masterPoints[i].SpawnTime = 0f;
-            }
-            for (int i = 0; i < masterMisses.Count; i++)
-            {
-                var ray = masterMisses[i];
-                ray.SpawnTime = 0f;
-                masterMisses[i] = ray;
-            }
+        _loadedPoints.Clear();
+        _loadedPoints.AddRange(result.Points);
+        _loadedMisses.Clear();
+        _loadedMisses.AddRange(result.Misses);
+        _loadedAvgDistance = result.AverageDistance;
+        BeginSelectionSessionFromLoadedData();
 
-            if (masterPoints.Count < 3)
-            {
-                Log("[ERROR] Not enough points to view.");
-                return;
-            }
-
-            Log("[RENDER] Estimating average point distance...");
-
-            // We need to find the minimum distance between points to accurately size the surfels.
-            // Since points are often added in a grid pattern, we can sample a subset of points
-            // and find their nearest neighbors. We use a spatial hash grid to make this fast.
-
-            int sampleCount = Math.Min(5000, masterPoints.Count);
-            double minTotalDist = 0;
-            int validSamples = 0;
-
-            // Create a coarse spatial grid for fast neighbor lookup
-            double cellSize = 100.0; // Assume points are closer than 100 units
-            var grid = new System.Collections.Generic.Dictionary<long, System.Collections.Generic.List<MeshTool.Core.Data.Vertex>>();
-
-            long GetHash(double x, double y, double z)
-            {
-                int gx = (int)Math.Floor(x / cellSize);
-                int gy = (int)Math.Floor(y / cellSize);
-                int gz = (int)Math.Floor(z / cellSize);
-                return ((long)gx * 73856093) ^ ((long)gy * 19349663) ^ ((long)gz * 83492791);
-            }
-
-            // Populate grid with all points
-            foreach (var p in masterPoints)
-            {
-                long h = GetHash(p.Position.X, p.Position.Y, p.Position.Z);
-                if (!grid.TryGetValue(h, out var list))
-                {
-                    list = new System.Collections.Generic.List<MeshTool.Core.Data.Vertex>();
-                    grid[h] = list;
-                }
-                list.Add(p);
-            }
-
-            // Sample points and find their nearest neighbor
-            var rand = new Random(42);
-            var samplePoints = new MeshTool.Core.Data.Vertex[sampleCount];
-            for (int i = 0; i < sampleCount; i++)
-            {
-                samplePoints[i] = masterPoints[rand.Next(masterPoints.Count)];
-            }
-
-            object lockObj = new object();
-
-            Parallel.ForEach(samplePoints, p1 =>
-            {
-                double minDistSq = double.MaxValue;
-
-                int cx = (int)Math.Floor(p1.Position.X / cellSize);
-                int cy = (int)Math.Floor(p1.Position.Y / cellSize);
-                int cz = (int)Math.Floor(p1.Position.Z / cellSize);
-
-                // Check 3x3x3 neighborhood
-                for (int dx = -1; dx <= 1; dx++)
-                {
-                    for (int dy = -1; dy <= 1; dy++)
-                    {
-                        for (int dz = -1; dz <= 1; dz++)
-                        {
-                            long h = ((long)(cx + dx) * 73856093) ^ ((long)(cy + dy) * 19349663) ^ ((long)(cz + dz) * 83492791);
-                            if (grid.TryGetValue(h, out var neighbors))
-                            {
-                                foreach (var p2 in neighbors)
-                                {
-                                    if (p1 == p2) continue;
-                                    double distSq = (p1.Position - p2.Position).LengthSquared();
-                                    if (distSq > 0.001 && distSq < minDistSq) // Ignore exact duplicates
-                                    {
-                                        minDistSq = distSq;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (minDistSq < double.MaxValue)
-                {
-                    double dist = Math.Sqrt(minDistSq);
-                    lock (lockObj)
-                    {
-                        minTotalDist += dist;
-                        validSamples++;
-                    }
-                }
-            });
-
-            float avgDistance = validSamples > 0 ? (float)(minTotalDist / validSamples) : 1.0f;
-            Log($"[RENDER] Computed avg point distance: {avgDistance:F4}");
-
-            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-            {
-                _loadedPoints.Clear();
-                _loadedPoints.AddRange(masterPoints);
-                _loadedMisses.Clear();
-                _loadedMisses.AddRange(masterMisses);
-                _loadedAvgDistance = avgDistance;
-                BeginSelectionSessionFromLoadedData();
-
-                Viewport.LoadData(masterPoints.ToArray(), masterMisses.ToArray(), avgDistance);
-                _isDbLoaded = true;
-                ApplyInteractionMode();
-            });
-        });
+        Viewport.LoadData(result.Points.ToArray(), result.Misses.ToArray(), result.AverageDistance);
+        _isDbLoaded = true;
+        ApplyInteractionMode();
     }
 
     private void SetScanEditingEnabled(bool enabled)
@@ -1339,24 +1158,10 @@ public partial class MainWindow : Window
 
     private async void BtnMonitor_Click(object sender, RoutedEventArgs e)
     {
-        if (_monitorTask != null)
+        if (_monitorController.IsRunning)
         {
-            _monitorCts?.Cancel();
             Log("[MONITOR] Stopping...");
-            try { await _monitorTask; } catch (OperationCanceledException) { /* Expected on cancellation */ }
-            _monitorTask = null;
-            _monitorCts?.Dispose();
-            _monitorCts = null;
-
-            BtnMonitor.Content = "Start Monitor";
-            BtnMesh.IsEnabled = true;
-            BtnBrowseDb.IsEnabled = true;
-            BtnNewDb.IsEnabled = true;
-            BtnClearDb.IsEnabled = true;
-            BtnGenerateMesh.IsEnabled = true;
-            UpdateMeshUiState();
-            ApplyInteractionMode();
-            ApplyMonitorRenderOverrides(false);
+            await _monitorController.StopAsync();
             return;
         }
 
@@ -1365,24 +1170,6 @@ public partial class MainWindow : Window
             Log("[ERROR] Select DB file first.");
             return;
         }
-
-        BtnMonitor.Content = "Stop Monitor";
-        BtnMesh.IsEnabled = false;
-        BtnBrowseDb.IsEnabled = false;
-        BtnNewDb.IsEnabled = false;
-        BtnClearDb.IsEnabled = false;
-        BtnGenerateMesh.IsEnabled = false;
-        BtnSaveMesh.IsEnabled = false;
-        ChkShowMesh.IsChecked = false;
-        ChkShowMesh.IsEnabled = false;
-        Viewport.PointSelectionModeEnabled = false;
-        SetScanEditingEnabled(false);
-        ChkPointSelectMode.IsEnabled = false;
-        BtnDeleteSelectedPoints.IsEnabled = false;
-        BtnClearSelectedPoints.IsEnabled = false;
-        BtnSelectionSave.IsEnabled = false;
-        BtnSelectionDiscard.IsEnabled = false;
-        ApplyMonitorRenderOverrides(true);
 
         if (!_isDbLoaded)
         {
@@ -1393,59 +1180,18 @@ public partial class MainWindow : Window
             catch (Exception ex)
             {
                 Log($"[ERROR] {ex.Message}");
-                BtnMonitor.Content = "Start Monitor";
-                BtnMesh.IsEnabled = true;
-                BtnBrowseDb.IsEnabled = true;
-                BtnNewDb.IsEnabled = true;
-                BtnClearDb.IsEnabled = true;
-                BtnGenerateMesh.IsEnabled = true;
-                UpdateMeshUiState();
-                ApplyInteractionMode();
-                ApplyMonitorRenderOverrides(false);
                 return;
             }
         }
-
-        _monitorCts = new CancellationTokenSource();
-        var token = _monitorCts.Token;
 
         var options = new MonitorRunOptions
         {
             StartAtEnd = true,
             IncludeSnapshots = false,
-            Log = Log,
-            OnUpdate = update =>
-            {
-                if (update.NewPoints != null || update.NewMisses != null)
-                {
-                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-                    {
-                        Viewport.AppendData(update.NewPoints, update.NewMisses, update.AvgDistance);
-                    });
-                }
-            }
+            Log = Log
         };
 
-        _monitorTask = MonitorRunner.RunAsync(_logPath, _dbPath, token, options);
-        _ = _monitorTask.ContinueWith(_ =>
-        {
-            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-            {
-                BtnMonitor.Content = "Start Monitor";
-                BtnMesh.IsEnabled = true;
-                BtnBrowseDb.IsEnabled = true;
-                BtnNewDb.IsEnabled = true;
-                BtnClearDb.IsEnabled = true;
-                BtnGenerateMesh.IsEnabled = true;
-                UpdateMeshUiState();
-                ApplyInteractionMode();
-                ApplyMonitorRenderOverrides(false);
-            });
-
-            _monitorTask = null;
-            _monitorCts?.Dispose();
-            _monitorCts = null;
-        });
+        await _monitorController.StartAsync(_logPath, _dbPath, options);
     }
 
     private void RenderSettings_Changed(object? sender, RoutedEventArgs e)

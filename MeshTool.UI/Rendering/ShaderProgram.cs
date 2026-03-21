@@ -1,5 +1,6 @@
 using Silk.NET.OpenGL;
 using System;
+using System.Collections.Generic;
 
 namespace MeshTool.UI.Rendering
 {
@@ -11,6 +12,7 @@ namespace MeshTool.UI.Rendering
         private readonly GL _gl;
         private readonly uint _programHandle;
         private readonly string _name;
+        private readonly Dictionary<string, int> _uniformLocations = new(StringComparer.Ordinal);
         private bool _disposed;
 
         /// <summary>
@@ -99,7 +101,14 @@ namespace MeshTool.UI.Rendering
         /// <returns>The uniform location, or -1 if not found.</returns>
         public int GetUniformLocation(string name)
         {
-            return _gl.GetUniformLocation(_programHandle, name);
+            if (_uniformLocations.TryGetValue(name, out int location))
+            {
+                return location;
+            }
+
+            location = _gl.GetUniformLocation(_programHandle, name);
+            _uniformLocations[name] = location;
+            return location;
         }
 
         /// <summary>
@@ -155,8 +164,8 @@ namespace MeshTool.UI.Rendering
         /// </summary>
         public unsafe void SetViewProjection(Silk.NET.Maths.Matrix4X4<float> view, Silk.NET.Maths.Matrix4X4<float> projection)
         {
-            int viewLoc = _gl.GetUniformLocation(_programHandle, "uView");
-            int projLoc = _gl.GetUniformLocation(_programHandle, "uProjection");
+            int viewLoc = GetUniformLocation("uView");
+            int projLoc = GetUniformLocation("uProjection");
 
             if (viewLoc >= 0)
                 _gl.UniformMatrix4(viewLoc, 1, false, (float*)&view);

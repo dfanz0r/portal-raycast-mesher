@@ -15,6 +15,14 @@ namespace MeshTool.UI.Rendering
         private const int FineDensityPreviewTargetPoints = 36000;
         private const float FineDensityPreviewAdjustRate = 0.35f;
         private const float ScanDensityRebuildMoveThreshold = 24f;
+        private const int PointInstanceStride = 8 * sizeof(float);
+        private const int RayVertexStride = 7 * sizeof(float);
+        private const int MeshVertexStride = 6 * sizeof(float);
+        private const int GridVertexStride = 3 * sizeof(float);
+        private const int AxesVertexStride = 6 * sizeof(float);
+        private const int ScanLineVertexStride = 6 * sizeof(float);
+        private const int ScanHandleVertexStride = 10 * sizeof(float);
+        private const int SelectionFillVertexStride = 3 * sizeof(float);
         private float _fineDensityPreviewRadius = 3200f;
         private GL _gl;
         private OpenGlViewport _viewport;
@@ -34,6 +42,15 @@ namespace MeshTool.UI.Rendering
         private int _scanDensityBroadCount;
         private uint _vaoSelectionFill, _vboSelectionFill;
         private int _selectionFillVertexCount;
+        private VertexArray? _meshBuffer;
+        private VertexArray? _gridBuffer;
+        private VertexArray? _axesBuffer;
+        private VertexArray? _scanVolumeBuffer;
+        private VertexArray? _scanHandleBuffer;
+        private VertexArray? _scanDensityBuffer;
+        private VertexArray? _selectionFillBuffer;
+        private DynamicBuffer? _pointInstanceBuffer;
+        private DynamicBuffer? _rayBuffer;
         private bool _scanDensityBufferValid;
         private ScanVolumeSettings _lastDensityScanVolume;
         private float _lastDensityFineTargetStep = -1f;
@@ -117,73 +134,7 @@ namespace MeshTool.UI.Rendering
             _shaderProgramPoints = new ShaderProgram(_gl, "Point", ShaderSource.PointVertex, ShaderSource.PointFragment, _viewport.OnLog);
 
             // --- SURFEL SHADER (Instanced) ---
-            string vsSurfel = @"#version 300 es
-                precision highp float;
-                layout (location = 0) in vec3 aVertex; // Unit circle vertex
-                layout (location = 1) in vec3 iPos;    // Instance Position
-                layout (location = 2) in vec3 iNormal; // Instance Normal
-                layout (location = 3) in float iSpawnTime; // Instance Spawn Time
-                layout (location = 4) in float iSelected; // Selection flag
-                
-                uniform mat4 uView;
-                uniform mat4 uProjection;
-                uniform float uScale;
-                uniform float uCurrentTime;
-                uniform vec3 uHoveredPos;
-                uniform float uHasHovered;
-                uniform float uUseDynamicColor; // Optional Color Mapping Toggle
-                uniform float uWorldMinY; // Bounds minimum Y
-                uniform float uWorldMaxY; // Bounds maximum Y
-
-                out vec3 Normal;
-                out vec3 Color;
-
-                // Simple viridis approximation
-                vec3 colormap(float t) {
-                    const vec3 c0 = vec3(0.277, 0.005, 0.334);
-                    const vec3 c1 = vec3(0.198, 0.410, 0.551);
-                    const vec3 c2 = vec3(0.122, 0.638, 0.518);
-                    const vec3 c3 = vec3(0.395, 0.812, 0.347);
-                    const vec3 c4 = vec3(0.993, 0.906, 0.144);
-                    
-                    if (t < 0.25) return mix(c0, c1, t / 0.25);
-                    if (t < 0.5) return mix(c1, c2, (t - 0.25) / 0.25);
-                    if (t < 0.75) return mix(c2, c3, (t - 0.5) / 0.25);
-                    return mix(c3, c4, (t - 0.75) / 0.25);
-                }
-
-                void main() {
-                    vec3 norm = normalize(iNormal);
-                    float s = norm.z >= 0.0 ? 1.0 : -1.0;
-                    float a = -1.0 / (s + norm.z);
-                    float b = norm.x * norm.y * a;
-                    vec3 tangent = normalize(vec3(1.0 + s * norm.x * norm.x * a, s * b, -s * norm.x));
-                    vec3 bitangent = normalize(vec3(b, s + norm.y * norm.y * a, -norm.y));
-                    
-                    // aVertex is unit disk in XZ plane, so X->tangent and Z->bitangent
-                    vec3 worldPos = iPos + (tangent * aVertex.x + bitangent * aVertex.z) * uScale;
-                    
-                    gl_Position = uProjection * uView * vec4(worldPos, 1.0);
-                    // Reverse Z: gl_Position.z is mapped to [1, 0] depth
-                    Normal = norm;
-                    
-                    float age = uCurrentTime - iSpawnTime;
-                    if (iSelected > 0.5) {
-                        Color = vec3(1.0, 0.62, 0.12); // Selected
-                    } else if (uHasHovered > 0.5 && length(iPos - uHoveredPos) < 0.001) {
-                        Color = vec3(1.0, 0.0, 1.0); // Magenta
-                    } else if (uUseDynamicColor > 0.5) {
-                        // Semantic Color Mapping Mode (Height-Based Viridis)
-                        float range = max(0.001, uWorldMaxY - uWorldMinY);
-                        float normalizedHeight = clamp((iPos.y - uWorldMinY) / range, 0.0, 1.0);
-                        Color = colormap(normalizedHeight);
-                    } else if (iSpawnTime <= 0.0 || age > 5.0 || age < 0.0) {
-                        Color = vec3(0.0, 0.7, 1.0); // Cyan
-                    } else {
-                        float t = age / 5.0;
-                        Color = mix(vec3(1.0, 0.0, 1.0), vec3(0.0, 0.7, 1.0), t); // Magenta to Cyan
-                    }
-                }";
+            string vsSurfel = ShaderSource.SurfelVertex;
             string fsSurfel = @"#version 300 es
                 precision highp float;
                 in vec3 Normal;
@@ -198,423 +149,53 @@ namespace MeshTool.UI.Rendering
             _shaderProgramSurfels = new ShaderProgram(_gl, "Surfel", vsSurfel, fsSurfel, _viewport.OnLog);
 
             // --- RAY SHADERS (Weighted Blended OIT) ---
-            string vsRay = @"#version 300 es
-                precision highp float;
-                layout (location = 0) in vec3 aPos;
-                layout (location = 1) in vec3 aBaseColor;
-                layout (location = 2) in float aSpawnTime;
-                uniform mat4 uView;
-                uniform mat4 uProjection;
-                uniform float uCurrentTime;
-                uniform vec3 uCameraPos;
-                out vec3 Color;
-                out float Alpha;
-                out float IsMissRay;
-                void main() {
-                    gl_Position = uProjection * uView * vec4(aPos, 1.0);
-
-                    float age = uCurrentTime - aSpawnTime;
-                    bool missRay = aBaseColor.r > 0.5 && aBaseColor.g < 0.5;
-                    IsMissRay = missRay ? 1.0 : 0.0;
-                    if (aSpawnTime <= 0.0 || age > 5.0 || age < 0.0) {
-                        Color = aBaseColor;
-                    } else {
-                        float t = age / 5.0;
-                        if (missRay) {
-                            Color = mix(vec3(1.0, 0.45, 0.45), vec3(1.0, 0.22, 0.22), t);
-                        } else {
-                            Color = aBaseColor;
-                        }
-                    }
-
-                    float baseAlpha = missRay ? 0.75 : 0.45;
-                    float dist = length(aPos - uCameraPos);
-                    float distFade = missRay ? 1.0 : (1.0 - smoothstep(500.0, 20000.0, dist));
-                    Alpha = baseAlpha * distFade;
-                }";
-            string fsRayAccum = @"#version 300 es
-                precision highp float;
-                in vec3 Color;
-                in float Alpha;
-                in float IsMissRay;
-                out vec4 FragColor;
-                void main() {
-                    vec3 c = Color;
-                    if (IsMissRay > 0.5) {
-                        c = vec3(1.0, 0.22, 0.22);
-                    }
-
-                    float z = gl_FragCoord.z;
-                    float weight = clamp(Alpha * 1e4 * pow(z, 4.0), 1e-2, 3e3);
-                    FragColor = vec4(c * Alpha * weight, Alpha * weight);
-                }";
-            string fsRayReveal = @"#version 300 es
-                precision highp float;
-                in float Alpha;
-                out vec4 FragColor;
-                void main() {
-                    FragColor = vec4(Alpha, Alpha, Alpha, Alpha);
-                }";
+            string vsRay = ShaderSource.RayOitVertex;
+            string fsRayAccum = ShaderSource.RayOitAccumFragment;
+            string fsRayReveal = ShaderSource.RayOitRevealFragment;
             _shaderProgramRayAccum = new ShaderProgram(_gl, "RayAccum", vsRay, fsRayAccum, _viewport.OnLog);
             _shaderProgramRayReveal = new ShaderProgram(_gl, "RayReveal", vsRay, fsRayReveal, _viewport.OnLog);
 
-            string vsComposite = @"#version 300 es
-                precision highp float;
-                layout (location = 0) in vec3 aPos;
-                out vec2 v_uv;
-                void main() {
-                    gl_Position = vec4(aPos, 1.0);
-                    v_uv = aPos.xy * 0.5 + 0.5;
-                }";
-            string fsComposite = @"#version 300 es
-                precision highp float;
-                in vec2 v_uv;
-                uniform sampler2D uOpaqueColor;
-                uniform sampler2D uAccumColor;
-                uniform sampler2D uRevealColor;
-                out vec4 FragColor;
-                void main() {
-                    vec3 opaque = texture(uOpaqueColor, v_uv).rgb;
-                    vec4 accum = texture(uAccumColor, v_uv);
-                    float reveal = clamp(texture(uRevealColor, v_uv).r, 0.0, 1.0);
-                    vec3 trans = accum.rgb / max(accum.a, 1e-5);
-                    vec3 outColor = trans * (1.0 - reveal) + opaque * reveal;
-                    FragColor = vec4(outColor, 1.0);
-                }";
+            string vsComposite = ShaderSource.GridRaycastVertex;
+            string fsComposite = ShaderSource.CompositeFragmentOit;
             _shaderProgramComposite = new ShaderProgram(_gl, "Composite", vsComposite, fsComposite, _viewport.OnLog);
 
             // --- AXES SHADER ---
-            string vsAxes = @"#version 300 es
-                precision highp float;
-                layout (location = 0) in vec3 aPos;
-                layout (location = 1) in vec3 aColor;
-                uniform mat4 uView;
-                uniform mat4 uProjection;
-                out vec3 Color;
-                void main() {
-                    gl_Position = uProjection * uView * vec4(aPos, 1.0);
-                    gl_PointSize = 3.5;
-                    Color = aColor;
-                }";
-            string fsAxes = @"#version 300 es
-                precision highp float;
-                in vec3 Color;
-                out vec4 FragColor;
-                void main() {
-                    FragColor = vec4(Color, 1.0);
-                }";
+            string vsAxes = ShaderSource.AxesVertex;
+            string fsAxes = ShaderSource.AxesFragment;
             _shaderProgramAxes = new ShaderProgram(_gl, "Axes", vsAxes, fsAxes, _viewport.OnLog);
 
-            string vsDensityPoints = @"#version 300 es
-                precision highp float;
-                layout (location = 0) in vec3 aPos;
-                layout (location = 1) in vec3 aColor;
-                uniform mat4 uView;
-                uniform mat4 uProjection;
-                uniform float uPointSize;
-                out vec3 Color;
-                out vec3 WorldPos;
-                void main() {
-                    gl_Position = uProjection * uView * vec4(aPos, 1.0);
-                    gl_PointSize = uPointSize;
-                    Color = aColor;
-                    WorldPos = aPos;
-                }";
-            string fsDensityPoints = @"#version 300 es
-                precision highp float;
-                in vec3 Color;
-                in vec3 WorldPos;
-                uniform vec2 uCameraXZ;
-                uniform float uFadeRadius;
-                uniform float uFadeBand;
-                uniform float uEnableFade;
-                out vec4 FragColor;
-                void main() {
-                    float alpha = 1.0;
-                    if (uEnableFade > 0.5) {
-                        float distXZ = distance(WorldPos.xz, uCameraXZ);
-                        float fadeStart = max(0.0, uFadeRadius - uFadeBand);
-                        alpha = 1.0 - smoothstep(fadeStart, uFadeRadius, distXZ);
-                        if (alpha <= 0.001) {
-                            discard;
-                        }
-                    }
-                    FragColor = vec4(Color, alpha);
-                }";
+            string vsDensityPoints = ShaderSource.DensityPointsVertex;
+            string fsDensityPoints = ShaderSource.DensityPointsFragment;
             _shaderProgramDensityPoints = new ShaderProgram(_gl, "DensityPoints", vsDensityPoints, fsDensityPoints, _viewport.OnLog);
 
-            string vsGizmoSolid = @"#version 300 es
-                precision highp float;
-                layout (location = 0) in vec3 aPos;
-                layout (location = 1) in vec3 aNormal;
-                layout (location = 2) in vec3 aColor;
-                layout (location = 3) in float aAlpha;
-                uniform mat4 uView;
-                uniform mat4 uProjection;
-                out vec3 vNormalWorld;
-                out vec3 vColor;
-                out float vAlpha;
-                void main() {
-                    gl_Position = uProjection * uView * vec4(aPos, 1.0);
-                    vNormalWorld = normalize(aNormal);
-                    vColor = aColor;
-                    vAlpha = aAlpha;
-                }";
-            string fsGizmoSolid = @"#version 300 es
-                precision highp float;
-                in vec3 vNormalWorld;
-                in vec3 vColor;
-                in float vAlpha;
-                out vec4 FragColor;
-                void main() {
-                    if (vAlpha < 0.999) discard;
-                    vec3 n = normalize(vNormalWorld);
-                    vec3 lightDir = normalize(vec3(0.35, 0.85, 0.4));
-                    float diff = max(dot(n, lightDir), 0.2);
-                    vec3 c = clamp(vColor * diff, 0.0, 1.0);
-                    FragColor = vec4(c, 1.0);
-                }";
+            string vsGizmoSolid = ShaderSource.GizmoSolidVertex;
+            string fsGizmoSolid = ShaderSource.GizmoSolidFragment;
             _shaderProgramGizmoSolid = new ShaderProgram(_gl, "GizmoSolid", vsGizmoSolid, fsGizmoSolid, _viewport.OnLog);
 
-            string fsGizmoAccum = @"#version 300 es
-                precision highp float;
-                in vec3 vNormalWorld;
-                in vec3 vColor;
-                in float vAlpha;
-                out vec4 FragColor;
-                void main() {
-                    if (vAlpha >= 0.999) discard;
-                    vec3 n = normalize(vNormalWorld);
-                    vec3 lightDir = normalize(vec3(0.35, 0.85, 0.4));
-                    float diff = max(dot(n, lightDir), 0.2);
-                    vec3 c = clamp(vColor * diff, 0.0, 1.0);
-                    float alpha = clamp(vAlpha, 0.0, 1.0);
-                    if (alpha < 0.001) discard;
-
-                    float z = gl_FragCoord.z;
-                    float weight = clamp(alpha * 1e4 * pow(z, 4.0), 1e-2, 3e3);
-                    FragColor = vec4(c * alpha * weight, alpha * weight);
-                }";
-            string fsGizmoReveal = @"#version 300 es
-                precision highp float;
-                in float vAlpha;
-                out vec4 FragColor;
-                void main() {
-                    if (vAlpha >= 0.999) discard;
-                    float alpha = clamp(vAlpha, 0.0, 1.0);
-                    if (alpha < 0.001) discard;
-                    FragColor = vec4(alpha, alpha, alpha, alpha);
-                }";
+            string fsGizmoAccum = ShaderSource.GizmoAccumFragment;
+            string fsGizmoReveal = ShaderSource.GizmoRevealFragment;
             _shaderProgramGizmoAccum = new ShaderProgram(_gl, "GizmoAccum", vsGizmoSolid, fsGizmoAccum, _viewport.OnLog);
             _shaderProgramGizmoReveal = new ShaderProgram(_gl, "GizmoReveal", vsGizmoSolid, fsGizmoReveal, _viewport.OnLog);
 
             // --- MESH SHADER ---
-            string vsMesh = @"#version 300 es
-                precision highp float;
-                layout (location = 0) in vec3 aPos;
-                layout (location = 1) in vec3 aNormal;
-                uniform mat4 uView;
-                uniform mat4 uProjection;
-                out vec3 Normal;
-                void main() {
-                    gl_Position = uProjection * uView * vec4(aPos, 1.0);
-                    Normal = aNormal;
-                }";
-            string fsMesh = @"#version 300 es
-                precision highp float;
-                in vec3 Normal;
-                out vec4 FragColor;
-                void main() {
-                    vec3 n = normalize(Normal);
-                    vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
-                    float diff = max(dot(n, lightDir), 0.2);
-                    vec3 color = vec3(0.8, 0.8, 0.8) * diff;
-                    FragColor = vec4(color, 1.0);
-                }";
+            string vsMesh = ShaderSource.MeshVertexSimple;
+            string fsMesh = ShaderSource.MeshFragmentSimple;
             _shaderProgramMesh = new ShaderProgram(_gl, "Mesh", vsMesh, fsMesh, _viewport.OnLog);
 
             // --- GRID SHADER ---
-            string vsGrid = @"#version 300 es
-                precision highp float;
-                layout (location = 0) in vec3 aPos;
-                out vec2 v_uv;
-                void main() {
-                    gl_Position = vec4(aPos, 1.0);
-                    v_uv = aPos.xy;
-                }";
-            string fsGridCommon = @"
-                precision highp float;
-                in vec2 v_uv;
-                uniform mat4 uView;
-                uniform mat4 uProjection;
-                uniform vec3 uCameraPos;
-                uniform float uGridPlaneY;
-                uniform float uGridSpacingMinor;
-                uniform float uGridSpacingMajor0;
-                uniform float uGridSpacingMajor1;
-                uniform vec2 uGridPhaseMinor;
-                uniform vec2 uGridPhaseMajor0;
-                uniform vec2 uGridPhaseMajor1;
-                uniform float uGridFade;
-                uniform float uGridFadeStart;
-                uniform float uGridFadeEnd;
-                float GridLineAA(vec2 localXZ, float spacing, vec2 phase, float lineWidthPx) {
-                    vec2 uv = (localXZ + phase) / spacing;
-                    vec2 deriv = max(fwidth(uv), vec2(1e-6));
-                    vec2 distToLine = abs(fract(uv - 0.5) - 0.5) / deriv;
-                    float lineDist = min(distToLine.x, distToLine.y);
-                    return 1.0 - smoothstep(lineWidthPx, lineWidthPx + 1.0, lineDist);
-                }
-";
-
-            string fsGridAccum = @"#version 300 es
-" + fsGridCommon + @"
-                out vec4 FragColor;
-                void main() {
-                    mat4 viewInv = inverse(uView);
-                    mat4 projInv = inverse(uProjection);
-
-                    vec4 nearViewH = projInv * vec4(v_uv.x, v_uv.y, 1.0, 1.0);
-                    vec4 farViewH = projInv * vec4(v_uv.x, v_uv.y, 0.0, 1.0);
-                    if (abs(nearViewH.w) < 0.000001 || abs(farViewH.w) < 0.000001) discard;
-                    vec3 nearView = nearViewH.xyz / nearViewH.w;
-                    vec3 farView = farViewH.xyz / farViewH.w;
-                    vec3 rayDirView = normalize(farView - nearView);
-                    vec3 rayDirWorld = normalize(mat3(viewInv) * rayDirView);
-
-                    float rayY = rayDirWorld.y;
-                    float safeRayY = abs(rayY) < 0.000001 ? (rayY < 0.0 ? -0.000001 : 0.000001) : rayY;
-                    float absRayY = abs(safeRayY);
-
-                    float t = (uGridPlaneY - uCameraPos.y) / safeRayY;
-                    if (t <= 0.0) discard;
-
-                    vec3 hitPosView = rayDirView * t;
-                    vec2 localXZ = rayDirWorld.xz * t;
-
-                    vec4 clip_space_pos = uProjection * vec4(hitPosView, 1.0);
-                    if (clip_space_pos.w <= 0.0) discard;
-                    float ndc_z = clip_space_pos.z / clip_space_pos.w;
-                    gl_FragDepth = clamp((ndc_z + 1.0) * 0.5, 0.0, 1.0);
-
-                    float fade = clamp(uGridFade, 0.0, 1.0);
-                    float widthPx = 1.0;
-                    float minor = GridLineAA(localXZ, uGridSpacingMinor, uGridPhaseMinor, widthPx);
-                    float major0 = GridLineAA(localXZ, uGridSpacingMajor0, uGridPhaseMajor0, widthPx);
-                    float major1 = GridLineAA(localXZ, uGridSpacingMajor1, uGridPhaseMajor1, widthPx);
-
-                    float wMinor = 0.08;
-                    float wMajor = 0.30;
-                    float aMinor = minor * ((1.0 - fade) * wMinor);
-                    float aMajor0 = major0 * (((1.0 - fade) * wMajor) + (fade * wMinor));
-                    float aMajor1 = major1 * (fade * wMajor);
-                    float gridAlpha = clamp(aMinor + aMajor0 + aMajor1, 0.0, 0.55);
-
-                    vec3 gridColor = vec3(0.4, 0.4, 0.4);
-                    vec4 finalColor = vec4(gridColor, gridAlpha);
-
-                    float horizonFade = smoothstep(0.01, 0.03, absRayY);
-                    finalColor.a *= horizonFade;
-                    if (finalColor.a < 0.001) discard;
-
-                    float z = gl_FragDepth;
-                    float weight = clamp(finalColor.a * 1e4 * pow(z, 4.0), 1e-2, 3e3);
-                    FragColor = vec4(finalColor.rgb * finalColor.a * weight, finalColor.a * weight);
-                }";
-
-            string fsGridReveal = @"#version 300 es
-" + fsGridCommon + @"
-                out vec4 FragColor;
-                void main() {
-                    mat4 viewInv = inverse(uView);
-                    mat4 projInv = inverse(uProjection);
-
-                    vec4 nearViewH = projInv * vec4(v_uv.x, v_uv.y, 1.0, 1.0);
-                    vec4 farViewH = projInv * vec4(v_uv.x, v_uv.y, 0.0, 1.0);
-                    if (abs(nearViewH.w) < 0.000001 || abs(farViewH.w) < 0.000001) discard;
-                    vec3 nearView = nearViewH.xyz / nearViewH.w;
-                    vec3 farView = farViewH.xyz / farViewH.w;
-                    vec3 rayDirView = normalize(farView - nearView);
-                    vec3 rayDirWorld = normalize(mat3(viewInv) * rayDirView);
-
-                    float rayY = rayDirWorld.y;
-                    float safeRayY = abs(rayY) < 0.000001 ? (rayY < 0.0 ? -0.000001 : 0.000001) : rayY;
-                    float absRayY = abs(safeRayY);
-
-                    float t = (uGridPlaneY - uCameraPos.y) / safeRayY;
-                    if (t <= 0.0) discard;
-
-                    vec3 hitPosView = rayDirView * t;
-                    vec2 localXZ = rayDirWorld.xz * t;
-
-                    vec4 clip_space_pos = uProjection * vec4(hitPosView, 1.0);
-                    if (clip_space_pos.w <= 0.0) discard;
-                    float ndc_z = clip_space_pos.z / clip_space_pos.w;
-                    gl_FragDepth = clamp((ndc_z + 1.0) * 0.5, 0.0, 1.0);
-
-                    float fade = clamp(uGridFade, 0.0, 1.0);
-                    float widthPx = 1.0;
-                    float minor = GridLineAA(localXZ, uGridSpacingMinor, uGridPhaseMinor, widthPx);
-                    float major0 = GridLineAA(localXZ, uGridSpacingMajor0, uGridPhaseMajor0, widthPx);
-                    float major1 = GridLineAA(localXZ, uGridSpacingMajor1, uGridPhaseMajor1, widthPx);
-
-                    float wMinor = 0.08;
-                    float wMajor = 0.30;
-                    float aMinor = minor * ((1.0 - fade) * wMinor);
-                    float aMajor0 = major0 * (((1.0 - fade) * wMajor) + (fade * wMinor));
-                    float aMajor1 = major1 * (fade * wMajor);
-                    float gridAlpha = clamp(aMinor + aMajor0 + aMajor1, 0.0, 0.55);
-
-                    vec4 finalColor = vec4(1.0, 1.0, 1.0, gridAlpha);
-
-                    float horizonFade = smoothstep(0.01, 0.03, absRayY);
-                    finalColor.a *= horizonFade;
-                    if (finalColor.a < 0.001) discard;
-
-                    FragColor = vec4(finalColor.a, finalColor.a, finalColor.a, finalColor.a);
-                }";
+            string vsGrid = ShaderSource.GridClipVertex;
+            string fsGridAccum = ShaderSource.GridOitAccumFragment;
+            string fsGridReveal = ShaderSource.GridOitRevealFragment;
 
             _shaderProgramGridAccum = new ShaderProgram(_gl, "GridAccum", vsGrid, fsGridAccum, _viewport.OnLog);
             _shaderProgramGridReveal = new ShaderProgram(_gl, "GridReveal", vsGrid, fsGridReveal, _viewport.OnLog);
 
-            string vsFlatColor = @"#version 300 es
-                precision highp float;
-                layout (location = 0) in vec3 aPos;
-                uniform mat4 uView;
-                uniform mat4 uProjection;
-                void main() {
-                    gl_Position = uProjection * uView * vec4(aPos, 1.0);
-                }";
-            string fsFlatColor = @"#version 300 es
-                precision highp float;
-                uniform vec4 uColor;
-                out vec4 FragColor;
-                void main() {
-                    FragColor = uColor;
-                }";
+            string vsFlatColor = ShaderSource.FlatColorVertex;
+            string fsFlatColor = ShaderSource.FlatColorFragment;
             _shaderProgramFlatColor = new ShaderProgram(_gl, "FlatColor", vsFlatColor, fsFlatColor, _viewport.OnLog);
 
-            string fsFlatAccum = @"#version 300 es
-                precision highp float;
-                uniform vec4 uColor;
-                out vec4 FragColor;
-                void main() {
-                    float alpha = clamp(uColor.a, 0.0, 1.0);
-                    if (alpha < 0.001) discard;
-
-                    float z = gl_FragCoord.z;
-                    float weight = clamp(alpha * 1e4 * pow(z, 4.0), 1e-2, 3e3);
-                    FragColor = vec4(uColor.rgb * alpha * weight, alpha * weight);
-                }";
-            string fsFlatReveal = @"#version 300 es
-                precision highp float;
-                uniform vec4 uColor;
-                out vec4 FragColor;
-                void main() {
-                    float alpha = clamp(uColor.a, 0.0, 1.0);
-                    if (alpha < 0.001) discard;
-                    FragColor = vec4(alpha, alpha, alpha, alpha);
-                }";
+            string fsFlatAccum = ShaderSource.FlatOitAccumFragment;
+            string fsFlatReveal = ShaderSource.FlatOitRevealFragment;
             _shaderProgramFlatAccum = new ShaderProgram(_gl, "FlatAccum", vsFlatColor, fsFlatAccum, _viewport.OnLog);
             _shaderProgramFlatReveal = new ShaderProgram(_gl, "FlatReveal", vsFlatColor, fsFlatReveal, _viewport.OnLog);
         }
@@ -626,17 +207,20 @@ namespace MeshTool.UI.Rendering
 
         private unsafe void InitBuffers()
         {
-            _vboInstances = _gl.GenBuffer();
+            _pointInstanceBuffer = new DynamicBuffer(_gl, PointInstanceStride);
+            _rayBuffer = new DynamicBuffer(_gl, RayVertexStride * 2);
+            _vboInstances = _pointInstanceBuffer.Handle;
+            _vboRays = _rayBuffer.Handle;
 
             // 1. Points VAO
             _vaoPoints = _gl.GenVertexArray();
             _gl.BindVertexArray(_vaoPoints);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)0);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)0);
             _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(3 * sizeof(float)));
             _gl.EnableVertexAttribArray(1);
-            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(7 * sizeof(float)));
+            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(7 * sizeof(float)));
             _gl.EnableVertexAttribArray(2);
 
             // 2. Surfels VAO
@@ -667,51 +251,48 @@ namespace MeshTool.UI.Rendering
             {
                 _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(surfelVerts.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
             }
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, GridVertexStride, (void*)0);
             _gl.EnableVertexAttribArray(0);
 
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)0);
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)0);
             _gl.EnableVertexAttribArray(1);
             _gl.VertexAttribDivisor(1, 1); // Instanced
 
-            _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+            _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(3 * sizeof(float)));
             _gl.EnableVertexAttribArray(2);
             _gl.VertexAttribDivisor(2, 1); // Instanced
 
-            _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+            _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(6 * sizeof(float)));
             _gl.EnableVertexAttribArray(3);
             _gl.VertexAttribDivisor(3, 1); // Instanced
 
-            _gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(7 * sizeof(float)));
+            _gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(7 * sizeof(float)));
             _gl.EnableVertexAttribArray(4);
             _gl.VertexAttribDivisor(4, 1); // Instanced
 
             // 3. Rays VAO
             _vaoRays = _gl.GenVertexArray();
-            _vboRays = _gl.GenBuffer();
             _gl.BindVertexArray(_vaoRays);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)0);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, RayVertexStride, (void*)0);
             _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(3 * sizeof(float)));
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, RayVertexStride, (void*)(3 * sizeof(float)));
             _gl.EnableVertexAttribArray(1);
-            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(6 * sizeof(float)));
+            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, RayVertexStride, (void*)(6 * sizeof(float)));
             _gl.EnableVertexAttribArray(2);
 
             // 4. Mesh VAO
-            _vaoMesh = _gl.GenVertexArray();
-            _vboMesh = _gl.GenBuffer();
-            _gl.BindVertexArray(_vaoMesh);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboMesh);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)0);
-            _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-            _gl.EnableVertexAttribArray(1);
+            _meshBuffer = new VertexArray(_gl, MeshVertexStride);
+            _vaoMesh = _meshBuffer.VaoHandle;
+            _vboMesh = _meshBuffer.VboHandle;
+            _meshBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
+            _meshBuffer.SetAttribute(1, 3, VertexAttribPointerType.Float, 3 * sizeof(float));
 
             // 5. Grid VAO (Full screen quad)
-            _vaoGrid = _gl.GenVertexArray();
-            _vboGrid = _gl.GenBuffer();
+            _gridBuffer = new VertexArray(_gl, GridVertexStride);
+            _vaoGrid = _gridBuffer.VaoHandle;
+            _vboGrid = _gridBuffer.VboHandle;
             float[] gridVerts = {
                 -1f,  1f, 0f,
                 -1f, -1f, 0f,
@@ -720,18 +301,13 @@ namespace MeshTool.UI.Rendering
                  1f, -1f, 0f,
                  1f,  1f, 0f
             };
-            _gl.BindVertexArray(_vaoGrid);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboGrid);
-            fixed (float* v = gridVerts)
-            {
-                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(gridVerts.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
-            }
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
-            _gl.EnableVertexAttribArray(0);
+            _gridBuffer.UploadData(gridVerts, 6, BufferUsageARB.StaticDraw);
+            _gridBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
 
             // 6. Axes VAO
-            _vaoAxes = _gl.GenVertexArray();
-            _vboAxes = _gl.GenBuffer();
+            _axesBuffer = new VertexArray(_gl, AxesVertexStride);
+            _vaoAxes = _axesBuffer.VaoHandle;
+            _vboAxes = _axesBuffer.VboHandle;
             float[] axesVerts = {
                 // X axis (Red)
                 0f, 0f, 0f,  1f, 0f, 0f,
@@ -743,91 +319,91 @@ namespace MeshTool.UI.Rendering
                 0f, 0f, 0f,  0f, 0f, 1f,
                 0f, 0f, 10000f,  0f, 0f, 1f
             };
-            _gl.BindVertexArray(_vaoAxes);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboAxes);
-            fixed (float* v = axesVerts)
-            {
-                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(axesVerts.Length * sizeof(float)), v, BufferUsageARB.StaticDraw);
-            }
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)0);
-            _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-            _gl.EnableVertexAttribArray(1);
+            _axesBuffer.UploadData(axesVerts, 6, BufferUsageARB.StaticDraw);
+            _axesBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
+            _axesBuffer.SetAttribute(1, 3, VertexAttribPointerType.Float, 3 * sizeof(float));
 
             // 8. Solid gizmo handles VAO (dynamic triangle list)
-            _vaoScanHandles = _gl.GenVertexArray();
-            _vboScanHandles = _gl.GenBuffer();
-            _gl.BindVertexArray(_vaoScanHandles);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboScanHandles);
-            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(4096 * 10 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)0);
-            _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)(3 * sizeof(float)));
-            _gl.EnableVertexAttribArray(1);
-            _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)(6 * sizeof(float)));
-            _gl.EnableVertexAttribArray(2);
-            _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)(9 * sizeof(float)));
-            _gl.EnableVertexAttribArray(3);
+            _scanHandleBuffer = new VertexArray(_gl, ScanHandleVertexStride, 4096);
+            _vaoScanHandles = _scanHandleBuffer.VaoHandle;
+            _vboScanHandles = _scanHandleBuffer.VboHandle;
+            _scanHandleBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
+            _scanHandleBuffer.SetAttribute(1, 3, VertexAttribPointerType.Float, 3 * sizeof(float));
+            _scanHandleBuffer.SetAttribute(2, 3, VertexAttribPointerType.Float, 6 * sizeof(float));
+            _scanHandleBuffer.SetAttribute(3, 1, VertexAttribPointerType.Float, 9 * sizeof(float));
 
             // 9. Scan density preview VAO (dynamic points)
-            _vaoScanDensity = _gl.GenVertexArray();
-            _vboScanDensity = _gl.GenBuffer();
-            _gl.BindVertexArray(_vaoScanDensity);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboScanDensity);
-            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(400000 * 6 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)0);
-            _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-            _gl.EnableVertexAttribArray(1);
+            _scanDensityBuffer = new VertexArray(_gl, ScanLineVertexStride, 400000);
+            _vaoScanDensity = _scanDensityBuffer.VaoHandle;
+            _vboScanDensity = _scanDensityBuffer.VboHandle;
+            _scanDensityBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
+            _scanDensityBuffer.SetAttribute(1, 3, VertexAttribPointerType.Float, 3 * sizeof(float));
 
             // 7. Scan volume gizmo VAO (dynamic line list)
-            _vaoScanVolume = _gl.GenVertexArray();
-            _vboScanVolume = _gl.GenBuffer();
-            _gl.BindVertexArray(_vaoScanVolume);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboScanVolume);
-            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(256 * 6 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)0);
-            _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-            _gl.EnableVertexAttribArray(1);
+            _scanVolumeBuffer = new VertexArray(_gl, ScanLineVertexStride, 256);
+            _vaoScanVolume = _scanVolumeBuffer.VaoHandle;
+            _vboScanVolume = _scanVolumeBuffer.VboHandle;
+            _scanVolumeBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
+            _scanVolumeBuffer.SetAttribute(1, 3, VertexAttribPointerType.Float, 3 * sizeof(float));
 
             // 10. Selection fill VAO (dynamic planar quad triangles)
-            _vaoSelectionFill = _gl.GenVertexArray();
-            _vboSelectionFill = _gl.GenBuffer();
-            _gl.BindVertexArray(_vaoSelectionFill);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboSelectionFill);
-            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(6 * 3 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
-            _gl.EnableVertexAttribArray(0);
+            _selectionFillBuffer = new VertexArray(_gl, SelectionFillVertexStride, 6);
+            _vaoSelectionFill = _selectionFillBuffer.VaoHandle;
+            _vboSelectionFill = _selectionFillBuffer.VboHandle;
+            _selectionFillBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
 
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
             _gl.BindVertexArray(0);
+
+            RebindPointVaos();
+            RebindRayVao();
+        }
+
+        private unsafe void RebindPointVaos()
+        {
+            _gl.BindVertexArray(_vaoPoints);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)0);
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(3 * sizeof(float)));
+            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(7 * sizeof(float)));
+
+            _gl.BindVertexArray(_vaoSurfels);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)0);
+            _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(3 * sizeof(float)));
+            _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(6 * sizeof(float)));
+            _gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(7 * sizeof(float)));
+        }
+
+        private unsafe void RebindRayVao()
+        {
+            _gl.BindVertexArray(_vaoRays);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
+            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, RayVertexStride, (void*)0);
+            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, RayVertexStride, (void*)(3 * sizeof(float)));
+            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, RayVertexStride, (void*)(6 * sizeof(float)));
         }
 
         public void Deinit()
         {
             _framebufferManager?.Dispose();
+            _meshBuffer?.Dispose();
+            _gridBuffer?.Dispose();
+            _axesBuffer?.Dispose();
+            _scanVolumeBuffer?.Dispose();
+            _scanHandleBuffer?.Dispose();
+            _scanDensityBuffer?.Dispose();
+            _selectionFillBuffer?.Dispose();
+            _pointInstanceBuffer?.Dispose();
+            _rayBuffer?.Dispose();
 
             _gl.DeleteVertexArray(_vaoPoints);
             _gl.DeleteVertexArray(_vaoSurfels);
             _gl.DeleteVertexArray(_vaoRays);
-            _gl.DeleteVertexArray(_vaoMesh);
-            _gl.DeleteVertexArray(_vaoGrid);
-            _gl.DeleteVertexArray(_vaoAxes);
-            _gl.DeleteVertexArray(_vaoScanVolume);
-            _gl.DeleteVertexArray(_vaoScanHandles);
-            _gl.DeleteVertexArray(_vaoScanDensity);
-            _gl.DeleteVertexArray(_vaoSelectionFill);
-            _gl.DeleteBuffer(_vboInstances);
+            _vaoMesh = _vaoGrid = _vaoAxes = _vaoScanVolume = _vaoScanHandles = _vaoScanDensity = _vaoSelectionFill = 0;
+            _vboMesh = _vboGrid = _vboAxes = _vboScanVolume = _vboScanHandles = _vboScanDensity = _vboSelectionFill = 0;
+            _vboInstances = _vboRays = 0;
             _gl.DeleteBuffer(_vboSurfelVerts);
-            _gl.DeleteBuffer(_vboRays);
-            _gl.DeleteBuffer(_vboMesh);
-            _gl.DeleteBuffer(_vboGrid);
-            _gl.DeleteBuffer(_vboAxes);
-            _gl.DeleteBuffer(_vboScanVolume);
-            _gl.DeleteBuffer(_vboScanHandles);
-            _gl.DeleteBuffer(_vboScanDensity);
-            _gl.DeleteBuffer(_vboSelectionFill);
             _shaderProgramPoints?.Dispose();
             _shaderProgramSurfels?.Dispose();
             _shaderProgramRayAccum?.Dispose();
@@ -1085,11 +661,7 @@ namespace MeshTool.UI.Rendering
                     if (_pendingMeshRawBuffer != null)
                     {
                         _meshVertexCount = _pendingMeshRawVertexCount;
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboMesh);
-                        fixed (float* v = _pendingMeshRawBuffer)
-                        {
-                            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_meshVertexCount * 6 * sizeof(float)), v, BufferUsageARB.StaticDraw);
-                        }
+                        _meshBuffer!.UploadData(_pendingMeshRawBuffer, _meshVertexCount, BufferUsageARB.StaticDraw);
                         ArrayPool<float>.Shared.Return(_pendingMeshRawBuffer);
                         _pendingMeshRawBuffer = null;
                     }
@@ -1109,8 +681,11 @@ namespace MeshTool.UI.Rendering
                 if (_pointCount > _pointCapacity)
                 {
                     _pointCapacity = Math.Max(_pointCapacity * 2, _pointCount + 10000);
-                    _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                    _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_pointCapacity * 8 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
+                    if (_pointInstanceBuffer!.EnsureCapacity(_pointCapacity))
+                    {
+                        _vboInstances = _pointInstanceBuffer.Handle;
+                        RebindPointVaos();
+                    }
                 }
 
                 if (_pointCount > 0)
@@ -1152,11 +727,7 @@ namespace MeshTool.UI.Rendering
                             if (points[i].Position.Y > _maxPointY) _maxPointY = (float)points[i].Position.Y;
                         }
 
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                        fixed (float* v = vertices)
-                        {
-                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(pointFloatCount * sizeof(float)), v);
-                        }
+                        _pointInstanceBuffer!.UploadSubData(vertices, 0, _pointCount);
                     }
                     finally
                     {
@@ -1167,8 +738,11 @@ namespace MeshTool.UI.Rendering
                 if (_rayCount > _rayCapacity)
                 {
                     _rayCapacity = Math.Max(_rayCapacity * 2, _rayCount + 10000);
-                    _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-                    _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_rayCapacity * 14 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
+                    if (_rayBuffer!.EnsureCapacity(_rayCapacity))
+                    {
+                        _vboRays = _rayBuffer.Handle;
+                        RebindRayVao();
+                    }
                 }
 
                 if (_rayCount > 0)
@@ -1226,11 +800,7 @@ namespace MeshTool.UI.Rendering
                             rayData[idx + 13] = 0f;
                         }
 
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-                        fixed (float* v = rayData)
-                        {
-                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(rayFloatCount * sizeof(float)), v);
-                        }
+                        _rayBuffer!.UploadSubData(rayData, 0, _rayCount);
                     }
                     finally
                     {
@@ -1259,31 +829,12 @@ namespace MeshTool.UI.Rendering
                     {
                         // Reallocate and copy old data
                         int newCapacity = Math.Max(_pointCapacity * 2, newPointCount + 10000);
-                        uint newVbo = _gl.GenBuffer();
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, newVbo);
-                        _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(newCapacity * 8 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
-
-                        _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, _vboInstances);
-                        _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, newVbo);
-                        _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, 0, 0, (nuint)(_pointCount * 8 * sizeof(float)));
-
-                        _gl.DeleteBuffer(_vboInstances);
-                        _vboInstances = newVbo;
+                        if (_pointInstanceBuffer!.EnsureCapacity(newCapacity))
+                        {
+                            _vboInstances = _pointInstanceBuffer.Handle;
+                            RebindPointVaos();
+                        }
                         _pointCapacity = newCapacity;
-
-                        // Re-bind VAOs to new VBO
-                        _gl.BindVertexArray(_vaoPoints);
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)0);
-                        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(3 * sizeof(float)));
-                        _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(7 * sizeof(float)));
-
-                        _gl.BindVertexArray(_vaoSurfels);
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)0);
-                        _gl.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(3 * sizeof(float)));
-                        _gl.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(6 * sizeof(float)));
-                        _gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, 8 * sizeof(float), (void*)(7 * sizeof(float)));
                     }
 
                     int pointFloatCount = addedPoints * 8;
@@ -1323,11 +874,7 @@ namespace MeshTool.UI.Rendering
                             if (newPoints[i].Position.Y > _maxPointY) _maxPointY = (float)newPoints[i].Position.Y;
                         }
 
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                        fixed (float* v = vertices)
-                        {
-                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(_pointCount * 8 * sizeof(float)), (nuint)(pointFloatCount * sizeof(float)), v);
-                        }
+                        _pointInstanceBuffer!.UploadSubData(vertices, _pointCount, addedPoints);
                     }
                     finally
                     {
@@ -1343,23 +890,12 @@ namespace MeshTool.UI.Rendering
                     if (newRayCount > _rayCapacity)
                     {
                         int newCapacity = Math.Max(_rayCapacity * 2, newRayCount + 10000);
-                        uint newVbo = _gl.GenBuffer();
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, newVbo);
-                        _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(newCapacity * 14 * sizeof(float)), null, BufferUsageARB.DynamicDraw);
-
-                        _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, _vboRays);
-                        _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, newVbo);
-                        _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, 0, 0, (nuint)(oldRayCount * 14 * sizeof(float)));
-
-                        _gl.DeleteBuffer(_vboRays);
-                        _vboRays = newVbo;
+                        if (_rayBuffer!.EnsureCapacity(newCapacity))
+                        {
+                            _vboRays = _rayBuffer.Handle;
+                            RebindRayVao();
+                        }
                         _rayCapacity = newCapacity;
-
-                        _gl.BindVertexArray(_vaoRays);
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-                        _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)0);
-                        _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(3 * sizeof(float)));
-                        _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, 7 * sizeof(float), (void*)(6 * sizeof(float)));
                     }
 
                     int bytesPerRay = 14 * sizeof(float);
@@ -1406,11 +942,7 @@ namespace MeshTool.UI.Rendering
                                 missData[idx + 13] = newMisses[i].SpawnTime;
                             }
 
-                            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-                            fixed (float* v = missData)
-                            {
-                                _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(oldMissRayCount * bytesPerRay), (nuint)(missFloatCount * sizeof(float)), v);
-                            }
+                            _rayBuffer!.UploadSubData(missData, oldMissRayCount, addedMisses);
                         }
                         finally
                         {
@@ -1460,11 +992,7 @@ namespace MeshTool.UI.Rendering
 
                             int oldNormalCount = oldPointCount;
                             int normalInsertRayIndex = oldMissRayCount + addedMisses + oldNormalCount;
-                            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-                            fixed (float* v = rayData)
-                            {
-                                _gl.BufferSubData(BufferTargetARB.ArrayBuffer, (nint)(normalInsertRayIndex * bytesPerRay), (nuint)(normalFloatCount * sizeof(float)), v);
-                            }
+                            _rayBuffer!.UploadSubData(rayData, normalInsertRayIndex, addedPoints);
                         }
                         finally
                         {
@@ -1529,11 +1057,7 @@ namespace MeshTool.UI.Rendering
                             vertices[i * 8 + 7] = _selectedPointIndices.Contains(i) ? 1f : 0f;
                         }
 
-                        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboInstances);
-                        fixed (float* v = vertices)
-                        {
-                            _gl.BufferSubData(BufferTargetARB.ArrayBuffer, 0, (nuint)(pointFloatCount * sizeof(float)), v);
-                        }
+                        _pointInstanceBuffer!.UploadSubData(vertices, 0, _pointCount);
                     }
                     finally
                     {
@@ -1593,11 +1117,7 @@ namespace MeshTool.UI.Rendering
                                 meshData[i * 18 + 17] = (float)n.Z;
                             }
 
-                            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboMesh);
-                            fixed (float* v = meshData)
-                            {
-                                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(meshFloatCount * sizeof(float)), v, BufferUsageARB.StaticDraw);
-                            }
+                            _meshBuffer!.UploadData(meshData, _meshVertexCount, BufferUsageARB.StaticDraw);
                         }
                         finally
                         {
@@ -1657,11 +1177,11 @@ namespace MeshTool.UI.Rendering
                 // Force unbind element array buffer in case it was bound elsewhere
                 _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, 0);
 
-                int dynColLocP = _gl.GetUniformLocation(_shaderProgramPoints.Handle, "uUseDynamicColor");
+                int dynColLocP = _shaderProgramPoints.GetUniformLocation("uUseDynamicColor");
                 _gl.Uniform1(dynColLocP, UseDynamicColorMapping ? 1.0f : 0.0f);
 
-                int minLocP = _gl.GetUniformLocation(_shaderProgramPoints.Handle, "uWorldMinY");
-                int maxLocP = _gl.GetUniformLocation(_shaderProgramPoints.Handle, "uWorldMaxY");
+                int minLocP = _shaderProgramPoints.GetUniformLocation("uWorldMinY");
+                int maxLocP = _shaderProgramPoints.GetUniformLocation("uWorldMaxY");
                 _gl.Uniform1(minLocP, _minPointY);
                 _gl.Uniform1(maxLocP, _maxPointY);
 
@@ -1674,14 +1194,14 @@ namespace MeshTool.UI.Rendering
                 _gl.UseProgram(_shaderProgramSurfels!.Handle);
                 SetUniforms(_shaderProgramSurfels, view, proj);
 
-                int scaleLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uScale");
+                int scaleLoc = _shaderProgramSurfels.GetUniformLocation("uScale");
                 _gl.Uniform1(scaleLoc, _avgDistance * 0.5f * _viewport.SurfelScale);
 
-                int timeLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uCurrentTime");
+                int timeLoc = _shaderProgramSurfels.GetUniformLocation("uCurrentTime");
                 _gl.Uniform1(timeLoc, currentTime);
 
-                int hasHoveredLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uHasHovered");
-                int hoveredPosLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uHoveredPos");
+                int hasHoveredLoc = _shaderProgramSurfels.GetUniformLocation("uHasHovered");
+                int hoveredPosLoc = _shaderProgramSurfels.GetUniformLocation("uHoveredPos");
                 if (HoveredCoordinate.HasValue)
                 {
                     _gl.Uniform1(hasHoveredLoc, 1.0f);
@@ -1692,11 +1212,11 @@ namespace MeshTool.UI.Rendering
                     _gl.Uniform1(hasHoveredLoc, 0.0f);
                 }
 
-                int dynColLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uUseDynamicColor");
+                int dynColLoc = _shaderProgramSurfels.GetUniformLocation("uUseDynamicColor");
                 _gl.Uniform1(dynColLoc, UseDynamicColorMapping ? 1.0f : 0.0f);
 
-                int minLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uWorldMinY");
-                int maxLoc = _gl.GetUniformLocation(_shaderProgramSurfels.Handle, "uWorldMaxY");
+                int minLoc = _shaderProgramSurfels.GetUniformLocation("uWorldMinY");
+                int maxLoc = _shaderProgramSurfels.GetUniformLocation("uWorldMaxY");
                 _gl.Uniform1(minLoc, _minPointY);
                 _gl.Uniform1(maxLoc, _maxPointY);
 
@@ -1755,15 +1275,15 @@ namespace MeshTool.UI.Rendering
                         SetUniforms(_shaderProgramDensityPoints, view, proj);
                         _gl.BindVertexArray(_vaoScanDensity);
                         var camPosPreview = _viewport.Camera.Position;
-                        int camLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints.Handle, "uCameraXZ");
-                        int radiusLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints.Handle, "uFadeRadius");
-                        int bandLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints.Handle, "uFadeBand");
-                        int fadeEnableLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints.Handle, "uEnableFade");
+                        int camLoc = _shaderProgramDensityPoints.GetUniformLocation("uCameraXZ");
+                        int radiusLoc = _shaderProgramDensityPoints.GetUniformLocation("uFadeRadius");
+                        int bandLoc = _shaderProgramDensityPoints.GetUniformLocation("uFadeBand");
+                        int fadeEnableLoc = _shaderProgramDensityPoints.GetUniformLocation("uEnableFade");
                         _gl.Uniform2(camLoc, camPosPreview.X, camPosPreview.Z);
                         float fadeBand = Math.Clamp(_fineDensityPreviewRadius * 0.22f, 260f, 1100f);
                         _gl.Uniform1(radiusLoc, _fineDensityPreviewRadius);
                         _gl.Uniform1(bandLoc, fadeBand);
-                        int psLoc = _gl.GetUniformLocation(_shaderProgramDensityPoints.Handle, "uPointSize");
+                        int psLoc = _shaderProgramDensityPoints.GetUniformLocation("uPointSize");
                         if (_scanDensityBroadCount > 0)
                         {
                             _gl.Uniform1(fadeEnableLoc, 0.0f);
@@ -1833,7 +1353,7 @@ namespace MeshTool.UI.Rendering
                 if (_viewport.ShowGrid)
                 {
                     _gl.UseProgram(_shaderProgramGridAccum!.Handle);
-                    SetGridUniforms(_shaderProgramGridAccum.Handle, view, proj, camPos);
+                    SetGridUniforms(_shaderProgramGridAccum, view, proj, camPos);
                     _gl.BindVertexArray(_vaoGrid);
                     _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
                 }
@@ -1842,9 +1362,9 @@ namespace MeshTool.UI.Rendering
                 {
                     _gl.UseProgram(_shaderProgramRayAccum!.Handle);
                     SetUniforms(_shaderProgramRayAccum, view, proj);
-                    int timeLocAccum = _gl.GetUniformLocation(_shaderProgramRayAccum.Handle, "uCurrentTime");
+                    int timeLocAccum = _shaderProgramRayAccum.GetUniformLocation("uCurrentTime");
                     _gl.Uniform1(timeLocAccum, currentTime);
-                    _gl.Uniform3(_gl.GetUniformLocation(_shaderProgramRayAccum.Handle, "uCameraPos"), camPos.X, camPos.Y, camPos.Z);
+                    _gl.Uniform3(_shaderProgramRayAccum.GetUniformLocation("uCameraPos"), camPos.X, camPos.Y, camPos.Z);
                     _gl.BindVertexArray(_vaoRays);
                     if (hasMissRays)
                     {
@@ -1860,7 +1380,7 @@ namespace MeshTool.UI.Rendering
                 {
                     _gl.UseProgram(_shaderProgramFlatAccum!.Handle);
                     SetUniforms(_shaderProgramFlatAccum, view, proj);
-                    int colorLocAccum = _gl.GetUniformLocation(_shaderProgramFlatAccum.Handle, "uColor");
+                    int colorLocAccum = _shaderProgramFlatAccum.GetUniformLocation("uColor");
                     _gl.Uniform4(colorLocAccum, 0.88f, 0.42f, 1.0f, 0.22f);
                     _gl.Disable(EnableCap.CullFace);
                     _gl.BindVertexArray(_vaoSelectionFill);
@@ -1885,7 +1405,7 @@ namespace MeshTool.UI.Rendering
                 if (_viewport.ShowGrid)
                 {
                     _gl.UseProgram(_shaderProgramGridReveal!.Handle);
-                    SetGridUniforms(_shaderProgramGridReveal.Handle, view, proj, camPos);
+                    SetGridUniforms(_shaderProgramGridReveal, view, proj, camPos);
                     _gl.BindVertexArray(_vaoGrid);
                     _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
                 }
@@ -1894,9 +1414,9 @@ namespace MeshTool.UI.Rendering
                 {
                     _gl.UseProgram(_shaderProgramRayReveal!.Handle);
                     SetUniforms(_shaderProgramRayReveal, view, proj);
-                    int timeLocReveal = _gl.GetUniformLocation(_shaderProgramRayReveal.Handle, "uCurrentTime");
+                    int timeLocReveal = _shaderProgramRayReveal.GetUniformLocation("uCurrentTime");
                     _gl.Uniform1(timeLocReveal, currentTime);
-                    _gl.Uniform3(_gl.GetUniformLocation(_shaderProgramRayReveal.Handle, "uCameraPos"), camPos.X, camPos.Y, camPos.Z);
+                    _gl.Uniform3(_shaderProgramRayReveal.GetUniformLocation("uCameraPos"), camPos.X, camPos.Y, camPos.Z);
                     _gl.BindVertexArray(_vaoRays);
                     if (hasMissRays)
                     {
@@ -1912,7 +1432,7 @@ namespace MeshTool.UI.Rendering
                 {
                     _gl.UseProgram(_shaderProgramFlatReveal!.Handle);
                     SetUniforms(_shaderProgramFlatReveal, view, proj);
-                    int colorLocReveal = _gl.GetUniformLocation(_shaderProgramFlatReveal.Handle, "uColor");
+                    int colorLocReveal = _shaderProgramFlatReveal.GetUniformLocation("uColor");
                     _gl.Uniform4(colorLocReveal, 0.88f, 0.42f, 1.0f, 0.22f);
                     _gl.Disable(EnableCap.CullFace);
                     _gl.BindVertexArray(_vaoSelectionFill);
@@ -1951,15 +1471,15 @@ namespace MeshTool.UI.Rendering
                 _gl.UseProgram(_shaderProgramComposite!.Handle);
                 _gl.ActiveTexture(TextureUnit.Texture0);
                 _gl.BindTexture(TextureTarget.Texture2D, _framebufferManager.ResolveColorTexture);
-                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite.Handle, "uOpaqueColor"), 0);
+                _gl.Uniform1(_shaderProgramComposite.GetUniformLocation("uOpaqueColor"), 0);
 
                 _gl.ActiveTexture(TextureUnit.Texture1);
                 _gl.BindTexture(TextureTarget.Texture2D, _framebufferManager.OitAccumTexture);
-                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite.Handle, "uAccumColor"), 1);
+                _gl.Uniform1(_shaderProgramComposite.GetUniformLocation("uAccumColor"), 1);
 
                 _gl.ActiveTexture(TextureUnit.Texture2);
                 _gl.BindTexture(TextureTarget.Texture2D, _framebufferManager.OitRevealTexture);
-                _gl.Uniform1(_gl.GetUniformLocation(_shaderProgramComposite.Handle, "uRevealColor"), 2);
+                _gl.Uniform1(_shaderProgramComposite.GetUniformLocation("uRevealColor"), 2);
 
                 _gl.BindVertexArray(_vaoGrid);
                 _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
@@ -1993,12 +1513,7 @@ namespace MeshTool.UI.Rendering
                 _selectionYBottom,
                 _selectionYTop);
             _scanVolumeVertexCount = data.Length / 6;
-
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboScanVolume);
-            fixed (float* v = data)
-            {
-                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), v, BufferUsageARB.DynamicDraw);
-            }
+            _scanVolumeBuffer!.UploadData(data, _scanVolumeVertexCount, BufferUsageARB.DynamicDraw);
         }
 
         private unsafe void UpdateSelectionFillBuffer()
@@ -2048,12 +1563,8 @@ namespace MeshTool.UI.Rendering
             }
 
             _selectionFillVertexCount = verts.Count / 3;
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboSelectionFill);
             var data = verts.ToArray();
-            fixed (float* v = data)
-            {
-                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), v, BufferUsageARB.DynamicDraw);
-            }
+            _selectionFillBuffer!.UploadData(data, _selectionFillVertexCount, BufferUsageARB.DynamicDraw);
         }
 
         private unsafe void UpdateScanHandleBuffer()
@@ -2061,12 +1572,7 @@ namespace MeshTool.UI.Rendering
             var s = _scanVolume.Sanitize();
             float[] data = ScanVolumeGeometryBuilder.BuildScanHandleSolidVertices(s, _hoverScanHandle, _activeScanHandle, _viewport.Camera.Position);
             _scanHandleVertexCount = data.Length / 10;
-
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboScanHandles);
-            fixed (float* v = data)
-            {
-                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), v, BufferUsageARB.DynamicDraw);
-            }
+            _scanHandleBuffer!.UploadData(data, _scanHandleVertexCount, BufferUsageARB.DynamicDraw);
         }
 
         private unsafe void UpdateScanDensityBuffer()
@@ -2081,12 +1587,7 @@ namespace MeshTool.UI.Rendering
             float[] data = density.Vertices;
             _scanDensityVertexCount = data.Length / 6;
             _scanDensityBroadCount = density.BroadCount;
-
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboScanDensity);
-            fixed (float* v = data)
-            {
-                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(data.Length * sizeof(float)), v, BufferUsageARB.DynamicDraw);
-            }
+            _scanDensityBuffer!.UploadData(data, _scanDensityVertexCount, BufferUsageARB.DynamicDraw);
 
             _scanDensityBufferValid = true;
             _lastDensityScanVolume = s;
@@ -2134,20 +1635,11 @@ namespace MeshTool.UI.Rendering
             return result < 0.0f ? result + modulus : result;
         }
 
-        private unsafe void SetUniforms(uint program, Matrix4X4<float> view, Matrix4X4<float> proj)
-        {
-            int viewLoc = _gl.GetUniformLocation(program, "uView");
-            _gl.UniformMatrix4(viewLoc, 1, false, (float*)&view);
-
-            int projLoc = _gl.GetUniformLocation(program, "uProjection");
-            _gl.UniformMatrix4(projLoc, 1, false, (float*)&proj);
-        }
-
-        private void SetGridUniforms(uint program, Matrix4X4<float> view, Matrix4X4<float> proj, Vector3D<float> camPos)
+        private void SetGridUniforms(ShaderProgram program, Matrix4X4<float> view, Matrix4X4<float> proj, Vector3D<float> camPos)
         {
             SetUniforms(program, view, proj);
-            _gl.Uniform3(_gl.GetUniformLocation(program, "uCameraPos"), camPos.X, camPos.Y, camPos.Z);
-            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridPlaneY"), GridPlaneY);
+            _gl.Uniform3(program.GetUniformLocation("uCameraPos"), camPos.X, camPos.Y, camPos.Z);
+            _gl.Uniform1(program.GetUniformLocation("uGridPlaneY"), GridPlaneY);
 
             double camHeight = Math.Max(Math.Abs((double)(camPos.Y - GridPlaneY)), 0.0001);
             double lod = Math.Log10(Math.Max(camHeight, 1.0));
@@ -2164,19 +1656,19 @@ namespace MeshTool.UI.Rendering
             float phaseMajor1X = PositiveModulo(camPos.X, spacingMajor1);
             float phaseMajor1Z = PositiveModulo(camPos.Z, spacingMajor1);
 
-            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridSpacingMinor"), spacingMinor);
-            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridSpacingMajor0"), spacingMajor0);
-            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridSpacingMajor1"), spacingMajor1);
-            _gl.Uniform2(_gl.GetUniformLocation(program, "uGridPhaseMinor"), phaseMinorX, phaseMinorZ);
-            _gl.Uniform2(_gl.GetUniformLocation(program, "uGridPhaseMajor0"), phaseMajor0X, phaseMajor0Z);
-            _gl.Uniform2(_gl.GetUniformLocation(program, "uGridPhaseMajor1"), phaseMajor1X, phaseMajor1Z);
-            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridFade"), fade);
+            _gl.Uniform1(program.GetUniformLocation("uGridSpacingMinor"), spacingMinor);
+            _gl.Uniform1(program.GetUniformLocation("uGridSpacingMajor0"), spacingMajor0);
+            _gl.Uniform1(program.GetUniformLocation("uGridSpacingMajor1"), spacingMajor1);
+            _gl.Uniform2(program.GetUniformLocation("uGridPhaseMinor"), phaseMinorX, phaseMinorZ);
+            _gl.Uniform2(program.GetUniformLocation("uGridPhaseMajor0"), phaseMajor0X, phaseMajor0Z);
+            _gl.Uniform2(program.GetUniformLocation("uGridPhaseMajor1"), phaseMajor1X, phaseMajor1Z);
+            _gl.Uniform1(program.GetUniformLocation("uGridFade"), fade);
 
             float baseFadeStart = 85000.0f;
             float camHeightFadeStart = Math.Abs(camPos.Y - GridPlaneY) * 12.0f;
             float fadeStart = MathF.Max(baseFadeStart, camHeightFadeStart);
-            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridFadeStart"), fadeStart);
-            _gl.Uniform1(_gl.GetUniformLocation(program, "uGridFadeEnd"), fadeStart * 1.15f);
+            _gl.Uniform1(program.GetUniformLocation("uGridFadeStart"), fadeStart);
+            _gl.Uniform1(program.GetUniformLocation("uGridFadeEnd"), fadeStart * 1.15f);
         }
 
     }

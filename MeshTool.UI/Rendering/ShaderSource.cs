@@ -80,54 +80,64 @@ namespace MeshTool.UI.Rendering
         /// </summary>
         public const string SurfelVertex = @"#version 300 es
             precision highp float;
-            layout (location = 0) in vec3 aPos;
-            layout (location = 1) in vec3 aNormal;
-            layout (location = 2) in float aSpawnTime;
-            layout (location = 3) in float aSelected;
+            layout (location = 0) in vec3 aVertex;
+            layout (location = 1) in vec3 iPos;
+            layout (location = 2) in vec3 iNormal;
+            layout (location = 3) in float iSpawnTime;
+            layout (location = 4) in float iSelected;
             uniform mat4 uView;
             uniform mat4 uProjection;
-            uniform float uAvgDistance;
             uniform float uScale;
-            uniform float uLatestSpawnTime;
-            uniform float uAnimationDuration;
+            uniform float uCurrentTime;
+            uniform vec3 uHoveredPos;
+            uniform float uHasHovered;
+            uniform float uUseDynamicColor;
+            uniform float uWorldMinY;
+            uniform float uWorldMaxY;
             
-            out vec3 WorldPos;
             out vec3 Normal;
-            out float SpawnTime;
-            out float Selected;
-            out float Highlight;
+            out vec3 Color;
+
+            vec3 colormap(float t) {
+                const vec3 c0 = vec3(0.277, 0.005, 0.334);
+                const vec3 c1 = vec3(0.198, 0.410, 0.551);
+                const vec3 c2 = vec3(0.122, 0.638, 0.518);
+                const vec3 c3 = vec3(0.395, 0.812, 0.347);
+                const vec3 c4 = vec3(0.993, 0.906, 0.144);
+
+                if (t < 0.25) return mix(c0, c1, t / 0.25);
+                if (t < 0.5) return mix(c1, c2, (t - 0.25) / 0.25);
+                if (t < 0.75) return mix(c2, c3, (t - 0.5) / 0.25);
+                return mix(c3, c4, (t - 0.75) / 0.25);
+            }
             
             void main() {
-                WorldPos = aPos;
-                Normal = aNormal;
-                SpawnTime = aSpawnTime;
-                Selected = aSelected;
-                
-                // Highlight newly spawned points
-                Highlight = 0.0;
-                if (uAnimationDuration > 0.0 && uLatestSpawnTime > 0.0) {
-                    float age = uLatestSpawnTime - SpawnTime;
-                    if (age >= 0.0 && age < uAnimationDuration) {
-                        Highlight = 1.0 - (age / uAnimationDuration);
-                    }
+                vec3 norm = normalize(iNormal);
+                float s = norm.z >= 0.0 ? 1.0 : -1.0;
+                float a = -1.0 / (s + norm.z);
+                float b = norm.x * norm.y * a;
+                vec3 tangent = normalize(vec3(1.0 + s * norm.x * norm.x * a, s * b, -s * norm.x));
+                vec3 bitangent = normalize(vec3(b, s + norm.y * norm.y * a, -norm.y));
+
+                vec3 worldPos = iPos + (tangent * aVertex.x + bitangent * aVertex.z) * uScale;
+                gl_Position = uProjection * uView * vec4(worldPos, 1.0);
+                Normal = norm;
+
+                float age = uCurrentTime - iSpawnTime;
+                if (iSelected > 0.5) {
+                    Color = vec3(1.0, 0.62, 0.12);
+                } else if (uHasHovered > 0.5 && length(iPos - uHoveredPos) < 0.001) {
+                    Color = vec3(1.0, 0.0, 1.0);
+                } else if (uUseDynamicColor > 0.5) {
+                    float range = max(0.001, uWorldMaxY - uWorldMinY);
+                    float normalizedHeight = clamp((iPos.y - uWorldMinY) / range, 0.0, 1.0);
+                    Color = colormap(normalizedHeight);
+                } else if (iSpawnTime <= 0.0 || age > 5.0 || age < 0.0) {
+                    Color = vec3(0.0, 0.7, 1.0);
+                } else {
+                    float t = age / 5.0;
+                    Color = mix(vec3(1.0, 0.0, 1.0), vec3(0.0, 0.7, 1.0), t);
                 }
-                
-                // Billboard: quad facing camera
-                vec3 camRight = vec3(uView[0][0], uView[1][0], uView[2][0]);
-                vec3 camUp = vec3(uView[0][1], uView[1][1], uView[2][1]);
-                
-                float size = uAvgDistance * uScale * 0.5;
-                vec3 pos = aPos;
-                
-                int vertId = gl_VertexID % 6;
-                vec2 offset = vec2(0.0);
-                if (vertId == 0 || vertId == 5) offset = vec2(-1.0, -1.0);
-                else if (vertId == 1) offset = vec2(1.0, -1.0);
-                else if (vertId == 2 || vertId == 3) offset = vec2(1.0, 1.0);
-                else offset = vec2(-1.0, 1.0);
-                
-                pos += camRight * offset.x * size + camUp * offset.y * size;
-                gl_Position = uProjection * uView * vec4(pos, 1.0);
             }";
 
         /// <summary>
@@ -591,7 +601,7 @@ namespace MeshTool.UI.Rendering
             in float vAlpha;
             out vec4 FragColor;
             void main() {
-                if (vAlpha >= 0.999) discard;
+                if (vAlpha < 0.999) discard;
                 vec3 n = normalize(vNormalWorld);
                 vec3 lightDir = normalize(vec3(0.35, 0.85, 0.4));
                 float diff = max(dot(n, lightDir), 0.2);
@@ -646,6 +656,18 @@ namespace MeshTool.UI.Rendering
             void main() {
                 gl_Position = vec4(aPos, 1.0);
                 v_uv = aPos.xy * 0.5 + 0.5;
+            }";
+
+        /// <summary>
+        /// Grid vertex shader that preserves clip-space coordinates for ray casting.
+        /// </summary>
+        public const string GridClipVertex = @"#version 300 es
+            precision highp float;
+            layout (location = 0) in vec3 aPos;
+            out vec2 v_uv;
+            void main() {
+                gl_Position = vec4(aPos, 1.0);
+                v_uv = aPos.xy;
             }";
 
         /// <summary>
@@ -816,6 +838,76 @@ namespace MeshTool.UI.Rendering
                 float alpha = clamp(uColor.a, 0.0, 1.0);
                 if (alpha < 0.001) discard;
                 FragColor = vec4(alpha, alpha, alpha, alpha);
+            }";
+
+        /// <summary>
+        /// Mesh vertex shader.
+        /// </summary>
+        public const string MeshVertexSimple = @"#version 300 es
+            precision highp float;
+            layout (location = 0) in vec3 aPos;
+            layout (location = 1) in vec3 aNormal;
+            uniform mat4 uView;
+            uniform mat4 uProjection;
+            out vec3 Normal;
+            void main() {
+                gl_Position = uProjection * uView * vec4(aPos, 1.0);
+                Normal = aNormal;
+            }";
+
+        /// <summary>
+        /// Mesh fragment shader.
+        /// </summary>
+        public const string MeshFragmentSimple = @"#version 300 es
+            precision highp float;
+            in vec3 Normal;
+            out vec4 FragColor;
+            void main() {
+                vec3 n = normalize(Normal);
+                vec3 lightDir = normalize(vec3(0.5, 1.0, 0.5));
+                float diff = max(dot(n, lightDir), 0.2);
+                vec3 color = vec3(0.8, 0.8, 0.8) * diff;
+                FragColor = vec4(color, 1.0);
+            }";
+
+        /// <summary>
+        /// Gizmo solid vertex shader.
+        /// </summary>
+        public const string GizmoSolidVertex = @"#version 300 es
+            precision highp float;
+            layout (location = 0) in vec3 aPos;
+            layout (location = 1) in vec3 aNormal;
+            layout (location = 2) in vec3 aColor;
+            layout (location = 3) in float aAlpha;
+            uniform mat4 uView;
+            uniform mat4 uProjection;
+            out vec3 vNormalWorld;
+            out vec3 vColor;
+            out float vAlpha;
+            void main() {
+                gl_Position = uProjection * uView * vec4(aPos, 1.0);
+                vNormalWorld = normalize(aNormal);
+                vColor = aColor;
+                vAlpha = aAlpha;
+            }";
+
+        /// <summary>
+        /// Composite fragment shader for OIT.
+        /// </summary>
+        public const string CompositeFragmentOit = @"#version 300 es
+            precision highp float;
+            in vec2 v_uv;
+            uniform sampler2D uOpaqueColor;
+            uniform sampler2D uAccumColor;
+            uniform sampler2D uRevealColor;
+            out vec4 FragColor;
+            void main() {
+                vec3 opaque = texture(uOpaqueColor, v_uv).rgb;
+                vec4 accum = texture(uAccumColor, v_uv);
+                float reveal = clamp(texture(uRevealColor, v_uv).r, 0.0, 1.0);
+                vec3 trans = accum.rgb / max(accum.a, 1e-5);
+                vec3 outColor = trans * (1.0 - reveal) + opaque * reveal;
+                FragColor = vec4(outColor, 1.0);
             }";
     }
 }

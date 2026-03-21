@@ -3,6 +3,7 @@ using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using MeshTool.Core.Config;
 using MeshTool.UI.Models;
 
 namespace MeshTool.UI.Controllers
@@ -13,11 +14,6 @@ namespace MeshTool.UI.Controllers
     /// </summary>
     public class ScanVolumeController
     {
-        private const float MinProbeCell = 64f;
-        private const float MaxProbeCell = 768f;
-        private const float MinFineStep = 8f;
-        private const float MaxFineStep = 96f;
-
         private readonly TextBox _txtCenterX;
         private readonly TextBox _txtCenterZ;
         private readonly TextBox _txtSizeX;
@@ -32,7 +28,7 @@ namespace MeshTool.UI.Controllers
         private readonly TextBlock _txtFineMeters;
 
         private bool _isSyncing;
-        private float _finePhaseTargetStep = 24f;
+        private float _finePhaseTargetStep = ScanDensity.DefaultFineStep;
 
         /// <summary>
         /// Gets or sets whether editing is enabled.
@@ -124,7 +120,7 @@ namespace MeshTool.UI.Controllers
             if (!EditingEnabled || _isSyncing) return;
 
             _finePhaseTargetStep = DensityToFineStep(e.NewValue);
-            UpdateMetersLabels(ScanVolumeSettings.Default.ProbeCellSize, _finePhaseTargetStep);
+            UpdateMetersLabels(DensityToCell(_sldDensity.Value), _finePhaseTargetStep);
             FineDensityChanged?.Invoke(_finePhaseTargetStep);
         }
 
@@ -174,7 +170,8 @@ namespace MeshTool.UI.Controllers
                 return false;
             }
 
-            settings = new ScanVolumeSettings(cx, cz, sx, sz, yTop, yBottom, yaw, tilt, ScanVolumeSettings.Default.ProbeCellSize).Sanitize();
+            float probeCellSize = DensityToCell(_sldDensity.Value);
+            settings = new ScanVolumeSettings(cx, cz, sx, sz, yTop, yBottom, yaw, tilt, probeCellSize).Sanitize();
             return true;
         }
 
@@ -214,7 +211,7 @@ namespace MeshTool.UI.Controllers
                 "YBottom" => settings with { YBottom = settings.YBottom + delta },
                 "Yaw" => settings with { YawDegrees = settings.YawDegrees + delta },
                 "RayTilt" => settings with { RayTiltDegrees = settings.RayTiltDegrees + delta },
-                "ProbeCell" => settings with { ProbeCellSize = MathF.Max(8f, settings.ProbeCellSize + delta) },
+                "ProbeCell" => settings with { ProbeCellSize = MathF.Max(ScanDensity.MinProbeCell, settings.ProbeCellSize + delta) },
                 _ => settings
             };
         }
@@ -232,8 +229,8 @@ namespace MeshTool.UI.Controllers
 
         private static double CellToDensity(float cell)
         {
-            float clamped = Math.Clamp(cell, MinProbeCell, MaxProbeCell);
-            float t = (clamped - MinProbeCell) / (MaxProbeCell - MinProbeCell);
+            float clamped = Math.Clamp(cell, ScanDensity.MinProbeCell, ScanDensity.MaxProbeCell);
+            float t = (clamped - ScanDensity.MinProbeCell) / (ScanDensity.MaxProbeCell - ScanDensity.MinProbeCell);
             return 1.0 - t;
         }
 
@@ -241,13 +238,13 @@ namespace MeshTool.UI.Controllers
         {
             float d = (float)Math.Clamp(density, 0.0, 1.0);
             float t = 1.0f - d;
-            return MinProbeCell + ((MaxProbeCell - MinProbeCell) * t);
+            return ScanDensity.MinProbeCell + ((ScanDensity.MaxProbeCell - ScanDensity.MinProbeCell) * t);
         }
 
         private static double FineStepToDensity(float step)
         {
-            float clamped = Math.Clamp(step, MinFineStep, MaxFineStep);
-            float t = (clamped - MinFineStep) / (MaxFineStep - MinFineStep);
+            float clamped = Math.Clamp(step, ScanDensity.MinFineStep, ScanDensity.MaxFineStep);
+            float t = (clamped - ScanDensity.MinFineStep) / (ScanDensity.MaxFineStep - ScanDensity.MinFineStep);
             return 1.0 - t;
         }
 
@@ -255,7 +252,7 @@ namespace MeshTool.UI.Controllers
         {
             float d = (float)Math.Clamp(density, 0.0, 1.0);
             float t = 1.0f - d;
-            return MinFineStep + ((MaxFineStep - MinFineStep) * t);
+            return ScanDensity.MinFineStep + ((ScanDensity.MaxFineStep - ScanDensity.MinFineStep) * t);
         }
     }
 }
