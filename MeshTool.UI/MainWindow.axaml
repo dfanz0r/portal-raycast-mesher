@@ -65,91 +65,14 @@
                     <Button Grid.Row="2" Grid.Column="1" x:Name="BtnSelectionDiscard" Content="Discard Selection" Click="BtnSelectionDiscard_Click" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
                 </Grid>
 
-                <Separator Background="{StaticResource EngineBorderBrush}" Margin="0,8" Height="1"/>
-                <TextBlock Text="Scan Volume" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource EngineTextLightBrush}" Margin="0,0,0,4"/>
-                <StackPanel Spacing="4">
-                    <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
-                        <TextBlock Grid.Column="0" Text="Center" Foreground="LightGray" VerticalAlignment="Center"/>
-                        <Border Grid.Column="1" Tag="CenterX" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="X" Foreground="#F87171" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <TextBox Classes="scanValue" x:Name="TxtScanCenterX" Grid.Column="2" Watermark="X" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
-                        <Border Grid.Column="3" Tag="CenterZ" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Z" Foreground="#60A5FA" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <TextBox Classes="scanValue" x:Name="TxtScanCenterZ" Grid.Column="4" Watermark="Z" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
-                    </Grid>
-
-                    <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
-                        <TextBlock Grid.Column="0" Text="Size" Foreground="LightGray" VerticalAlignment="Center"/>
-                        <Border Grid.Column="1" Tag="SizeX" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="X" Foreground="#F87171" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <TextBox Classes="scanValue" x:Name="TxtScanSizeX" Grid.Column="2" Watermark="X" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
-                        <Border Grid.Column="3" Tag="SizeZ" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Z" Foreground="#60A5FA" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <TextBox Classes="scanValue" x:Name="TxtScanSizeZ" Grid.Column="4" Watermark="Z" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
-                    </Grid>
-
-                    <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
-                        <TextBlock Grid.Column="0" Text="Y" Foreground="LightGray" VerticalAlignment="Center"/>
-                        <Border Grid.Column="1" Tag="YTop" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Top" Foreground="#4ADE80" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <TextBox Classes="scanValue" x:Name="TxtScanYTop" Grid.Column="2" Watermark="Top" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
-                        <Border Grid.Column="3" Tag="YBottom" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Bot" Foreground="#4ADE80" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <TextBox Classes="scanValue" x:Name="TxtScanYBottom" Grid.Column="4" Watermark="Bot" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
-                    </Grid>
-
-                    <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
-                        <TextBlock Grid.Column="0" Text="Angles" Foreground="LightGray" VerticalAlignment="Center"/>
-                        <Border Grid.Column="1" Tag="Yaw" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Yaw" Foreground="#FBBF24" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <TextBox Classes="scanValue" x:Name="TxtScanYaw" Grid.Column="2" Watermark="Deg" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
-                        <Border Grid.Column="3" Tag="RayTilt" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast" PointerPressed="ScanHandle_PointerPressed" PointerMoved="ScanHandle_PointerMoved" PointerReleased="ScanHandle_PointerReleased"><TextBlock Text="Tilt" Foreground="#F59E0B" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                        <TextBox Classes="scanValue" x:Name="TxtScanRayTilt" Grid.Column="4" Watermark="Deg" TextAlignment="Right" HorizontalContentAlignment="Right" TextChanged="ScanVolumeField_TextChanged"/>
-                    </Grid>
-
-                </StackPanel>
-                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="3">
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Broad Phase Density" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <Slider Grid.Row="0" Grid.Column="1" x:Name="SldScanDensity" Margin="0,-8,0,0" VerticalAlignment="Center" Minimum="0" Maximum="1" Value="0.5" ValueChanged="SldScanDensity_ValueChanged" ToolTip.Tip="Higher = denser broad phase seeds (smaller probe cell)"/>
-                    <TextBlock Grid.Row="0" Grid.Column="2" x:Name="TxtBroadDensityMeters" Text="--- m" Foreground="#A7F3D0" VerticalAlignment="Center" FontFamily="Consolas"/>
-                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Fine Phase Density" Foreground="LightGray" VerticalAlignment="Center"/>
-                    <Slider Grid.Row="1" Grid.Column="1" x:Name="SldFineDensity" Margin="0,-8,0,0" VerticalAlignment="Center" Minimum="0" Maximum="1" Value="0.75" ValueChanged="SldFineDensity_ValueChanged" ToolTip.Tip="Higher = denser fine phase refinement (smaller target step)"/>
-                    <TextBlock Grid.Row="1" Grid.Column="2" x:Name="TxtFineDensityMeters" Text="--- m" Foreground="#93C5FD" VerticalAlignment="Center" FontFamily="Consolas"/>
-                </Grid>
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-                    <Button x:Name="BtnResetScanVolume" Grid.Column="0" Content="Reset Volume" Click="BtnResetScanVolume_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-                    <Button x:Name="BtnExportScanTs" Grid.Column="1" Content="Copy Script" Click="BtnExportScanTs_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Copy the portal raycast script based on the current view bounding volume"/>
-                </Grid>
-                
-                <Separator Background="{StaticResource EngineBorderBrush}" Margin="0,8" Height="1"/>
-
-                <!-- Actions -->
-                <Button x:Name="BtnMonitor" Content="Start Monitor" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnMonitor_Click"/>
-                <Button x:Name="BtnGenerateMesh" Content="Generate Mesh" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnGenerateMesh_Click"/>
-                <Button x:Name="BtnSaveMesh" Content="Save Mesh..." HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnSaveMesh_Click" IsEnabled="False"/>
-                <ProgressBar x:Name="PrgProcessing" IsIndeterminate="True" IsVisible="False" Height="4" Margin="0,4,0,0"/>
+                <controls:ScanVolumePanel x:Name="ScanPanel"/>
+                <controls:ActionButtonsPanel x:Name="ActionPanel"/>
 
                 <Separator Background="{StaticResource EngineBorderBrush}" Margin="0,8" Height="1"/>
 
                 <!-- Render Settings -->
-                <TextBlock Text="Render Settings" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource EngineTextLightBrush}" Margin="0,0,0,4"/>
-                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="2">
-                    <CheckBox x:Name="ChkShowPoints" Grid.Row="0" Grid.Column="0" Content="Show Points" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
-                    <CheckBox x:Name="ChkShowSurfels" Grid.Row="0" Grid.Column="1" Content="Show Surfels" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
-                    <CheckBox x:Name="ChkShowMissRays" Grid.Row="1" Grid.Column="0" Content="Show Miss Rays" IsChecked="False" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
-                    <CheckBox x:Name="ChkShowNormals" Grid.Row="1" Grid.Column="1" Content="Show Ray Normals" IsChecked="False" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
-                    <CheckBox x:Name="ChkShowMesh" Grid.Row="2" Grid.Column="0" Content="Show Mesh Preview" IsChecked="False" IsEnabled="False" Checked="ChkShowMesh_Changed" Unchecked="ChkShowMesh_Changed" Foreground="White"/>
-                    <CheckBox x:Name="ChkShowGrid" Grid.Row="2" Grid.Column="1" Content="Show Grid" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
-                    <CheckBox x:Name="ChkShowDensityPreview" Grid.Row="3" Grid.Column="0" Content="Show Density Preview" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
-                    <CheckBox x:Name="ChkShowVolume" Grid.Row="3" Grid.Column="1" Content="Show Scan Volume" IsChecked="True" Checked="RenderSettings_Changed" Unchecked="RenderSettings_Changed" Foreground="White"/>
-                    <CheckBox x:Name="ChkDynamicColor" Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Content="Use Dynamic Color Mapping" IsChecked="False" Checked="ChkDynamicColor_Changed" Unchecked="ChkDynamicColor_Changed" Foreground="White"/>
-                </Grid>
-                
-                <TextBlock Text="Surfel Size Multiplier" Foreground="LightGray" Margin="0,4,0,0"/>
-                <Slider x:Name="SldSurfelSize" Minimum="0.1" Maximum="5.0" Value="1.0" ValueChanged="SldSurfelSize_ValueChanged"/>
-                
-                <Separator Background="{StaticResource EngineBorderBrush}" Margin="0,8" Height="1"/>
-                <TextBlock Text="Hovered Coordinate:" Foreground="LightGray" />
-                <TextBlock x:Name="TxtHoveredCoord" Text="X: ---, Y: ---, Z: ---" Foreground="Cyan" FontSize="14" FontFamily="Consolas" FontWeight="Bold"/>
-
-                <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" Margin="0,4,0,0">
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Camera Speed:" Foreground="LightGray"/>
-                    <TextBlock Grid.Row="1" Grid.Column="0" x:Name="TxtCameraSpeed" Text="---" Foreground="Yellow" FontSize="14" FontFamily="Consolas" FontWeight="Bold"/>
-                    <ToggleButton Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" x:Name="BtnToggleConsole" Content="Console" Padding="8,4" FontSize="11" VerticalAlignment="Center" IsChecked="False" Click="BtnToggleConsole_Click" ToolTip.Tip="Toggle console panel visibility"/>
-                </Grid>
+                <controls:RenderSettingsPanel x:Name="RenderPanel"/>
+                <controls:StatusPanel x:Name="StatusPanel"/>
                 
             </StackPanel>
             </ScrollViewer>
@@ -161,29 +84,6 @@
         </Border>
 
         <!-- BOTTOM PANEL: Console -->
-        <Border x:Name="ConsolePanel" Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="1" Background="{StaticResource EnginePanelBgBrush}" BorderBrush="{StaticResource EngineBorderBrush}" BorderThickness="0,1,0,0" IsVisible="False">
-            <Grid RowDefinitions="Auto,*">
-                <Border Grid.Row="0" Background="{StaticResource EngineControlBgBrush}" Padding="8,4">
-                    <Grid ColumnDefinitions="Auto,*,Auto">
-                        <TextBlock Grid.Column="0" Text="Console Output" FontWeight="SemiBold" Foreground="{StaticResource EngineTextLightBrush}" VerticalAlignment="Center"/>
-                        <TextBlock Grid.Column="1" x:Name="TxtConsoleCount" Text="" Foreground="#888888" VerticalAlignment="Center" HorizontalAlignment="Center" FontSize="11"/>
-                        <Button Grid.Column="2" x:Name="BtnClearConsole" Content="Clear" Padding="8,2" FontSize="11" Click="BtnClearConsole_Click"/>
-                    </Grid>
-                </Border>
-                <ListBox Grid.Row="1" x:Name="LstConsole" Padding="4" Background="{StaticResource EngineBgBrush}" BorderThickness="0" Foreground="LightGreen" FontSize="12" FontFamily="Consolas" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" MaxHeight="150">
-                    <ListBox.Styles>
-                        <Style Selector="ListBoxItem">
-                            <Setter Property="Padding" Value="5,1"/>
-                            <Setter Property="MinHeight" Value="18"/>
-                        </Style>
-                    </ListBox.Styles>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding}" TextWrapping="NoWrap" LineHeight="16" />
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-            </Grid>
-        </Border>
+        <controls:ConsoleOutputPanel x:Name="ConsolePanel" Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="1"/>
     </Grid>
 </Window>

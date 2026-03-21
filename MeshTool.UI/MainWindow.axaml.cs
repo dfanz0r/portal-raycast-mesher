@@ -13,12 +13,52 @@ using MeshTool.Core.Config;
 using MeshTool.Core.Data;
 using MeshTool.Core.IO;
 using MeshTool.UI.Controllers;
+using MeshTool.UI.Controls;
 using MeshTool.UI.Models;
 
 namespace MeshTool.UI;
 
 public partial class MainWindow : Window
 {
+    private RenderSettingsPanel RenderSettingsControl => this.FindControl<RenderSettingsPanel>("RenderPanel")!;
+    private ConsoleOutputPanel ConsoleOutputControl => this.FindControl<ConsoleOutputPanel>("ConsolePanel")!;
+    private ScanVolumePanel ScanVolumeControl => this.FindControl<ScanVolumePanel>("ScanPanel")!;
+    private ActionButtonsPanel ActionButtonsControl => this.FindControl<ActionButtonsPanel>("ActionPanel")!;
+    private StatusPanel StatusControl => this.FindControl<StatusPanel>("StatusPanel")!;
+    private CheckBox ShowPointsCheckBox => RenderSettingsControl.ShowPointsCheckBox;
+    private CheckBox ShowSurfelsCheckBox => RenderSettingsControl.ShowSurfelsCheckBox;
+    private CheckBox ShowMissRaysCheckBox => RenderSettingsControl.ShowMissRaysCheckBox;
+    private CheckBox ShowNormalsCheckBox => RenderSettingsControl.ShowNormalsCheckBox;
+    private CheckBox ShowMeshCheckBox => RenderSettingsControl.ShowMeshCheckBox;
+    private CheckBox ShowGridCheckBox => RenderSettingsControl.ShowGridCheckBox;
+    private CheckBox ShowDensityPreviewCheckBox => RenderSettingsControl.ShowDensityPreviewCheckBox;
+    private CheckBox ShowVolumeCheckBox => RenderSettingsControl.ShowVolumeCheckBox;
+    private CheckBox DynamicColorCheckBox => RenderSettingsControl.DynamicColorCheckBox;
+    private Slider SurfelSizeSlider => RenderSettingsControl.SurfelSizeSlider;
+    private ListBox ConsoleListBox => ConsoleOutputControl.ConsoleList;
+    private TextBlock ConsoleCountTextBlock => ConsoleOutputControl.ConsoleCountTextBlock;
+    private TextBox ScanCenterXTextBox => ScanVolumeControl.ScanCenterXTextBox;
+    private TextBox ScanCenterZTextBox => ScanVolumeControl.ScanCenterZTextBox;
+    private TextBox ScanSizeXTextBox => ScanVolumeControl.ScanSizeXTextBox;
+    private TextBox ScanSizeZTextBox => ScanVolumeControl.ScanSizeZTextBox;
+    private TextBox ScanYTopTextBox => ScanVolumeControl.ScanYTopTextBox;
+    private TextBox ScanYBottomTextBox => ScanVolumeControl.ScanYBottomTextBox;
+    private TextBox ScanYawTextBox => ScanVolumeControl.ScanYawTextBox;
+    private TextBox ScanRayTiltTextBox => ScanVolumeControl.ScanRayTiltTextBox;
+    private Slider ScanDensitySlider => ScanVolumeControl.ScanDensitySlider;
+    private Slider FineDensitySlider => ScanVolumeControl.FineDensitySlider;
+    private TextBlock BroadDensityTextBlock => ScanVolumeControl.BroadDensityTextBlock;
+    private TextBlock FineDensityTextBlock => ScanVolumeControl.FineDensityTextBlock;
+    private Button ResetScanVolumeButton => ScanVolumeControl.ResetScanVolumeButton;
+    private Button ExportScanScriptButton => ScanVolumeControl.ExportScanScriptButton;
+    private Button MonitorButton => ActionButtonsControl.MonitorButton;
+    private Button GenerateMeshButton => ActionButtonsControl.GenerateMeshButton;
+    private Button SaveMeshButton => ActionButtonsControl.SaveMeshButton;
+    private ProgressBar ProcessingProgressBar => ActionButtonsControl.ProcessingProgressBar;
+    private TextBlock HoveredCoordTextBlock => StatusControl.HoveredCoordinateTextBlock;
+    private TextBlock CameraSpeedTextBlock => StatusControl.CameraSpeedTextBlock;
+    private Avalonia.Controls.Primitives.ToggleButton ToggleConsoleButton => StatusControl.ToggleConsoleButton;
+
     private string _dbPath = string.Empty;
     private readonly string _logPath;
     private readonly System.Collections.ObjectModel.ObservableCollection<string> _logLines = new();
@@ -51,20 +91,21 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        WirePanelEvents();
 
         _scanVolumeController = new ScanVolumeController(
-            TxtScanCenterX,
-            TxtScanCenterZ,
-            TxtScanSizeX,
-            TxtScanSizeZ,
-            TxtScanYTop,
-            TxtScanYBottom,
-            TxtScanYaw,
-            TxtScanRayTilt,
-            SldScanDensity,
-            SldFineDensity,
-            TxtBroadDensityMeters,
-            TxtFineDensityMeters);
+            ScanCenterXTextBox,
+            ScanCenterZTextBox,
+            ScanSizeXTextBox,
+            ScanSizeZTextBox,
+            ScanYTopTextBox,
+            ScanYBottomTextBox,
+            ScanYawTextBox,
+            ScanRayTiltTextBox,
+            ScanDensitySlider,
+            FineDensitySlider,
+            BroadDensityTextBlock,
+            FineDensityTextBlock);
 
         // Initialize logger with file output
         InitializeLogger();
@@ -76,7 +117,7 @@ public partial class MainWindow : Window
         Viewport.OnSelectionCountChanged = OnSelectionCountChanged;
         Viewport.OnDeleteSelectionRequested = OnDeleteSelectionRequested;
         Viewport.OnToggleSelectionModeRequested = OnToggleSelectionModeRequested;
-        LstConsole.ItemsSource = _logLines;
+        ConsoleListBox.ItemsSource = _logLines;
         CmbDbPath.ItemsSource = _dbFiles;
 
         _scanVolumeController.ScanVolumeChanged += settings => Viewport.SetScanVolume(settings);
@@ -108,6 +149,47 @@ public partial class MainWindow : Window
         ApplyInteractionMode();
     }
 
+    private void WirePanelEvents()
+    {
+        ConsoleOutputControl.ClearConsoleButton.Click += BtnClearConsole_Click;
+        ToggleConsoleButton.Click += BtnToggleConsole_Click;
+
+        ScanCenterXTextBox.TextChanged += ScanVolumeField_TextChanged;
+        ScanCenterZTextBox.TextChanged += ScanVolumeField_TextChanged;
+        ScanSizeXTextBox.TextChanged += ScanVolumeField_TextChanged;
+        ScanSizeZTextBox.TextChanged += ScanVolumeField_TextChanged;
+        ScanYTopTextBox.TextChanged += ScanVolumeField_TextChanged;
+        ScanYBottomTextBox.TextChanged += ScanVolumeField_TextChanged;
+        ScanYawTextBox.TextChanged += ScanVolumeField_TextChanged;
+        ScanRayTiltTextBox.TextChanged += ScanVolumeField_TextChanged;
+        ScanDensitySlider.ValueChanged += SldScanDensity_ValueChanged;
+        FineDensitySlider.ValueChanged += SldFineDensity_ValueChanged;
+        ResetScanVolumeButton.Click += BtnResetScanVolume_Click;
+        ExportScanScriptButton.Click += BtnExportScanTs_Click;
+
+        foreach (var handle in ScanVolumeControl.ScanHandleBorders)
+        {
+            handle.PointerPressed += ScanHandle_PointerPressed;
+            handle.PointerMoved += ScanHandle_PointerMoved;
+            handle.PointerReleased += ScanHandle_PointerReleased;
+        }
+
+        MonitorButton.Click += BtnMonitor_Click;
+        GenerateMeshButton.Click += BtnGenerateMesh_Click;
+        SaveMeshButton.Click += BtnSaveMesh_Click;
+
+        ShowPointsCheckBox.IsCheckedChanged += RenderSettings_Changed;
+        ShowSurfelsCheckBox.IsCheckedChanged += RenderSettings_Changed;
+        ShowMissRaysCheckBox.IsCheckedChanged += RenderSettings_Changed;
+        ShowNormalsCheckBox.IsCheckedChanged += RenderSettings_Changed;
+        ShowGridCheckBox.IsCheckedChanged += RenderSettings_Changed;
+        ShowDensityPreviewCheckBox.IsCheckedChanged += RenderSettings_Changed;
+        ShowVolumeCheckBox.IsCheckedChanged += RenderSettings_Changed;
+        ShowMeshCheckBox.IsCheckedChanged += ChkShowMesh_Changed;
+        DynamicColorCheckBox.IsCheckedChanged += ChkDynamicColor_Changed;
+        SurfelSizeSlider.ValueChanged += SldSurfelSize_ValueChanged;
+    }
+
     private void InitializeLogger()
     {
         // Subscribe to logger events for UI updates
@@ -132,12 +214,12 @@ public partial class MainWindow : Window
             }
 
             // Update console count
-            if (TxtConsoleCount != null)
+            if (ConsoleCountTextBlock != null)
             {
-                TxtConsoleCount.Text = _logLines.Count > 0 ? $"{_logLines.Count} lines" : string.Empty;
+                ConsoleCountTextBlock.Text = _logLines.Count > 0 ? $"{_logLines.Count} lines" : string.Empty;
             }
 
-            if (_logLines.Count == 0 || !LstConsole.IsVisible)
+            if (_logLines.Count == 0 || !ConsoleListBox.IsVisible)
             {
                 return;
             }
@@ -149,7 +231,7 @@ public partial class MainWindow : Window
                 {
                     if (_logLines.Count > 0)
                     {
-                        LstConsole.ScrollIntoView(_logLines[^1]);
+                        ConsoleListBox.ScrollIntoView(_logLines[^1]);
                     }
                 }
                 catch (InvalidOperationException)
@@ -163,18 +245,18 @@ public partial class MainWindow : Window
     private void UpdateMeshUiState()
     {
         bool hasMesh = _cachedMesh != null;
-        if (ChkShowMesh != null)
+        if (ShowMeshCheckBox != null)
         {
-            ChkShowMesh.IsEnabled = hasMesh;
+            ShowMeshCheckBox.IsEnabled = hasMesh;
             if (!hasMesh)
             {
-                ChkShowMesh.IsChecked = false;
+                ShowMeshCheckBox.IsChecked = false;
             }
         }
 
-        if (BtnSaveMesh != null)
+        if (SaveMeshButton != null)
         {
-            BtnSaveMesh.IsEnabled = hasMesh;
+            SaveMeshButton.IsEnabled = hasMesh;
         }
     }
 
@@ -182,7 +264,7 @@ public partial class MainWindow : Window
     {
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            TxtCameraSpeed.Text = $"{speed:F1} m/s";
+            CameraSpeedTextBlock.Text = $"{speed:F1} m/s";
         });
     }
 
@@ -192,11 +274,11 @@ public partial class MainWindow : Window
         {
             if (coord.HasValue)
             {
-                TxtHoveredCoord.Text = $"X: {coord.Value.X:F2}, Y: {coord.Value.Y:F2}, Z: {coord.Value.Z:F2}";
+                HoveredCoordTextBlock.Text = $"X: {coord.Value.X:F2}, Y: {coord.Value.Y:F2}, Z: {coord.Value.Z:F2}";
             }
             else
             {
-                TxtHoveredCoord.Text = "X: ---, Y: ---, Z: ---";
+                HoveredCoordTextBlock.Text = "X: ---, Y: ---, Z: ---";
             }
         });
     }
@@ -210,15 +292,15 @@ public partial class MainWindow : Window
     {
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            BtnMonitor.Content = "Stop Monitor";
+            MonitorButton.Content = "Stop Monitor";
             BtnMesh.IsEnabled = false;
             BtnBrowseDb.IsEnabled = false;
             BtnNewDb.IsEnabled = false;
             BtnClearDb.IsEnabled = false;
-            BtnGenerateMesh.IsEnabled = false;
-            BtnSaveMesh.IsEnabled = false;
-            ChkShowMesh.IsChecked = false;
-            ChkShowMesh.IsEnabled = false;
+            GenerateMeshButton.IsEnabled = false;
+            SaveMeshButton.IsEnabled = false;
+            ShowMeshCheckBox.IsChecked = false;
+            ShowMeshCheckBox.IsEnabled = false;
             Viewport.PointSelectionModeEnabled = false;
             SetScanEditingEnabled(false);
             ChkPointSelectMode.IsEnabled = false;
@@ -234,12 +316,12 @@ public partial class MainWindow : Window
     {
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
-            BtnMonitor.Content = "Start Monitor";
+            MonitorButton.Content = "Start Monitor";
             BtnMesh.IsEnabled = true;
             BtnBrowseDb.IsEnabled = true;
             BtnNewDb.IsEnabled = true;
             BtnClearDb.IsEnabled = true;
-            BtnGenerateMesh.IsEnabled = true;
+            GenerateMeshButton.IsEnabled = true;
             UpdateMeshUiState();
             ApplyInteractionMode();
             ApplyMonitorRenderOverrides(false);
@@ -464,9 +546,9 @@ public partial class MainWindow : Window
 
     private void BtnToggleConsole_Click(object? sender, RoutedEventArgs e)
     {
-        if (ConsolePanel != null)
+        if (ConsoleOutputControl != null)
         {
-            ConsolePanel.IsVisible = BtnToggleConsole.IsChecked == true;
+            ConsoleOutputControl.IsVisible = ToggleConsoleButton.IsChecked == true;
         }
     }
 
@@ -474,9 +556,9 @@ public partial class MainWindow : Window
     {
         _logLines.Clear();
         Logger.ClearRecentLogs();
-        if (TxtConsoleCount != null)
+        if (ConsoleCountTextBlock != null)
         {
-            TxtConsoleCount.Text = string.Empty;
+            ConsoleCountTextBlock.Text = string.Empty;
         }
     }
 
@@ -836,7 +918,7 @@ public partial class MainWindow : Window
         return result;
     }
 
-    private async void BtnGenerateMesh_Click(object sender, RoutedEventArgs e)
+    private async void BtnGenerateMesh_Click(object? sender, RoutedEventArgs e)
     {
         if (_monitorController.IsRunning)
         {
@@ -853,7 +935,7 @@ public partial class MainWindow : Window
         await GenerateMeshFromDbAsync();
     }
 
-    private async void BtnSaveMesh_Click(object sender, RoutedEventArgs e)
+    private async void BtnSaveMesh_Click(object? sender, RoutedEventArgs e)
     {
         if (_cachedMesh == null)
         {
@@ -886,7 +968,7 @@ public partial class MainWindow : Window
         if (file == null) return;
 
         string outPath = file.Path.LocalPath;
-        BtnSaveMesh.IsEnabled = false;
+        SaveMeshButton.IsEnabled = false;
         try
         {
             await Task.Run(() =>
@@ -914,7 +996,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            BtnSaveMesh.IsEnabled = _cachedMesh != null;
+            SaveMeshButton.IsEnabled = _cachedMesh != null;
         }
     }
 
@@ -922,12 +1004,12 @@ public partial class MainWindow : Window
     {
         _meshGenerationInProgress = true;
         // Always show mesh during generation and keep preview visible after completion.
-        ChkShowMesh.IsChecked = true;
+        ShowMeshCheckBox.IsChecked = true;
         Viewport.ShowMesh = true;
 
-        BtnGenerateMesh.IsEnabled = false;
-        ChkShowMesh.IsEnabled = false;
-        PrgProcessing.IsVisible = true;
+        GenerateMeshButton.IsEnabled = false;
+        ShowMeshCheckBox.IsEnabled = false;
+        ProcessingProgressBar.IsVisible = true;
         try
         {
             await Task.Run(() =>
@@ -1000,7 +1082,7 @@ public partial class MainWindow : Window
                 _cachedMesh = allTriangles;
             });
 
-            if (_cachedMesh != null && ChkShowMesh.IsChecked == true)
+            if (_cachedMesh != null && ShowMeshCheckBox.IsChecked == true)
             {
                 Viewport.LoadMesh(_cachedMesh);
                 Viewport.ShowMesh = true;
@@ -1013,8 +1095,8 @@ public partial class MainWindow : Window
         finally
         {
             _meshGenerationInProgress = false;
-            BtnGenerateMesh.IsEnabled = true;
-            PrgProcessing.IsVisible = false;
+            GenerateMeshButton.IsEnabled = true;
+            ProcessingProgressBar.IsVisible = false;
             UpdateMeshUiState();
         }
     }
@@ -1074,30 +1156,30 @@ public partial class MainWindow : Window
         Viewport.ScanVolumeEditEnabled = enabled;
         Viewport.ShowScanHandles = enabled;
 
-        TxtScanCenterX.IsEnabled = enabled;
-        TxtScanCenterZ.IsEnabled = enabled;
-        TxtScanSizeX.IsEnabled = enabled;
-        TxtScanSizeZ.IsEnabled = enabled;
-        TxtScanYTop.IsEnabled = enabled;
-        TxtScanYBottom.IsEnabled = enabled;
-        TxtScanYaw.IsEnabled = enabled;
-        TxtScanRayTilt.IsEnabled = enabled;
-        SldScanDensity.IsEnabled = enabled;
-        SldFineDensity.IsEnabled = enabled;
-        BtnResetScanVolume.IsEnabled = enabled;
+        ScanCenterXTextBox.IsEnabled = enabled;
+        ScanCenterZTextBox.IsEnabled = enabled;
+        ScanSizeXTextBox.IsEnabled = enabled;
+        ScanSizeZTextBox.IsEnabled = enabled;
+        ScanYTopTextBox.IsEnabled = enabled;
+        ScanYBottomTextBox.IsEnabled = enabled;
+        ScanYawTextBox.IsEnabled = enabled;
+        ScanRayTiltTextBox.IsEnabled = enabled;
+        ScanDensitySlider.IsEnabled = enabled;
+        FineDensitySlider.IsEnabled = enabled;
+        ResetScanVolumeButton.IsEnabled = enabled;
 
         Viewport.Invalidate();
     }
 
     private void ApplyRenderSettingsToViewport()
     {
-        Viewport.ShowPoints = ChkShowPoints.IsChecked ?? true;
-        Viewport.ShowSurfels = ChkShowSurfels.IsChecked ?? true;
-        Viewport.ShowMissRays = ChkShowMissRays.IsChecked ?? true;
-        Viewport.ShowNormalRays = ChkShowNormals.IsChecked ?? true;
-        Viewport.ShowGrid = ChkShowGrid.IsChecked ?? true;
-        Viewport.ShowScanDensityPreview = ChkShowDensityPreview.IsChecked ?? true;
-        Viewport.ShowScanVolume = ChkShowVolume.IsChecked ?? true;
+        Viewport.ShowPoints = ShowPointsCheckBox.IsChecked ?? true;
+        Viewport.ShowSurfels = ShowSurfelsCheckBox.IsChecked ?? true;
+        Viewport.ShowMissRays = ShowMissRaysCheckBox.IsChecked ?? true;
+        Viewport.ShowNormalRays = ShowNormalsCheckBox.IsChecked ?? true;
+        Viewport.ShowGrid = ShowGridCheckBox.IsChecked ?? true;
+        Viewport.ShowScanDensityPreview = ShowDensityPreviewCheckBox.IsChecked ?? true;
+        Viewport.ShowScanVolume = ShowVolumeCheckBox.IsChecked ?? true;
     }
 
     private void ApplyMonitorRenderOverrides(bool enabled)
@@ -1106,26 +1188,26 @@ public partial class MainWindow : Window
         {
             if (!_monitorRenderOverridesActive)
             {
-                _preMonitorShowPoints = ChkShowPoints.IsChecked ?? true;
-                _preMonitorShowSurfels = ChkShowSurfels.IsChecked ?? true;
-                _preMonitorShowMissRays = ChkShowMissRays.IsChecked ?? false;
-                _preMonitorShowDensityPreview = ChkShowDensityPreview.IsChecked ?? true;
-                _preMonitorShowVolume = ChkShowVolume.IsChecked ?? true;
+                _preMonitorShowPoints = ShowPointsCheckBox.IsChecked ?? true;
+                _preMonitorShowSurfels = ShowSurfelsCheckBox.IsChecked ?? true;
+                _preMonitorShowMissRays = ShowMissRaysCheckBox.IsChecked ?? false;
+                _preMonitorShowDensityPreview = ShowDensityPreviewCheckBox.IsChecked ?? true;
+                _preMonitorShowVolume = ShowVolumeCheckBox.IsChecked ?? true;
             }
 
             _monitorRenderOverridesActive = true;
 
-            ChkShowPoints.IsChecked = true;
-            ChkShowSurfels.IsChecked = true;
-            ChkShowMissRays.IsChecked = true;
-            ChkShowDensityPreview.IsChecked = false;
-            ChkShowVolume.IsChecked = true;
+            ShowPointsCheckBox.IsChecked = true;
+            ShowSurfelsCheckBox.IsChecked = true;
+            ShowMissRaysCheckBox.IsChecked = true;
+            ShowDensityPreviewCheckBox.IsChecked = false;
+            ShowVolumeCheckBox.IsChecked = true;
 
-            ChkShowPoints.IsEnabled = false;
-            ChkShowSurfels.IsEnabled = false;
-            ChkShowMissRays.IsEnabled = false;
-            ChkShowDensityPreview.IsEnabled = false;
-            ChkShowVolume.IsEnabled = false;
+            ShowPointsCheckBox.IsEnabled = false;
+            ShowSurfelsCheckBox.IsEnabled = false;
+            ShowMissRaysCheckBox.IsEnabled = false;
+            ShowDensityPreviewCheckBox.IsEnabled = false;
+            ShowVolumeCheckBox.IsEnabled = false;
 
             ApplyRenderSettingsToViewport();
             Viewport.ShowScanHandles = false;
@@ -1140,23 +1222,23 @@ public partial class MainWindow : Window
 
         _monitorRenderOverridesActive = false;
 
-        ChkShowPoints.IsEnabled = true;
-        ChkShowSurfels.IsEnabled = true;
-        ChkShowMissRays.IsEnabled = true;
-        ChkShowDensityPreview.IsEnabled = true;
-        ChkShowVolume.IsEnabled = true;
+        ShowPointsCheckBox.IsEnabled = true;
+        ShowSurfelsCheckBox.IsEnabled = true;
+        ShowMissRaysCheckBox.IsEnabled = true;
+        ShowDensityPreviewCheckBox.IsEnabled = true;
+        ShowVolumeCheckBox.IsEnabled = true;
 
-        ChkShowPoints.IsChecked = _preMonitorShowPoints;
-        ChkShowSurfels.IsChecked = _preMonitorShowSurfels;
-        ChkShowMissRays.IsChecked = _preMonitorShowMissRays;
-        ChkShowDensityPreview.IsChecked = _preMonitorShowDensityPreview;
-        ChkShowVolume.IsChecked = _preMonitorShowVolume;
+        ShowPointsCheckBox.IsChecked = _preMonitorShowPoints;
+        ShowSurfelsCheckBox.IsChecked = _preMonitorShowSurfels;
+        ShowMissRaysCheckBox.IsChecked = _preMonitorShowMissRays;
+        ShowDensityPreviewCheckBox.IsChecked = _preMonitorShowDensityPreview;
+        ShowVolumeCheckBox.IsChecked = _preMonitorShowVolume;
 
         ApplyRenderSettingsToViewport();
         Viewport.Invalidate();
     }
 
-    private async void BtnMonitor_Click(object sender, RoutedEventArgs e)
+    private async void BtnMonitor_Click(object? sender, RoutedEventArgs e)
     {
         if (_monitorController.IsRunning)
         {
@@ -1202,13 +1284,13 @@ public partial class MainWindow : Window
 
     private void ChkShowMesh_Changed(object? sender, RoutedEventArgs e)
     {
-        bool showMesh = ChkShowMesh.IsChecked ?? false;
+        bool showMesh = ShowMeshCheckBox.IsChecked ?? false;
         Viewport.ShowMesh = showMesh;
 
         if (showMesh && _cachedMesh == null && !_meshGenerationInProgress)
         {
             Log("[MESH] Generate mesh first using 'Generate Mesh'.");
-            ChkShowMesh.IsChecked = false;
+            ShowMeshCheckBox.IsChecked = false;
             Viewport.LoadMesh(null);
             Viewport.Invalidate();
             return;
@@ -1228,13 +1310,13 @@ public partial class MainWindow : Window
 
     private void ChkDynamicColor_Changed(object? sender, RoutedEventArgs e)
     {
-        Viewport.UseDynamicColorMapping = ChkDynamicColor.IsChecked ?? false;
+        Viewport.UseDynamicColorMapping = DynamicColorCheckBox.IsChecked ?? false;
         Viewport.Invalidate();
     }
 
     private void SldSurfelSize_ValueChanged(object? sender, Avalonia.Controls.Primitives.RangeBaseValueChangedEventArgs e)
     {
-        Viewport.SurfelScale = (float)SldSurfelSize.Value;
+        Viewport.SurfelScale = (float)SurfelSizeSlider.Value;
         Viewport.Invalidate();
     }
 

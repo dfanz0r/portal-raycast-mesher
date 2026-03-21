@@ -1,0 +1,21 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MeshTool.UI.Controls.RenderSettingsPanel">
+    <StackPanel Spacing="6">
+        <TextBlock Text="Render Settings" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource EngineTextLightBrush}" Margin="0,0,0,4"/>
+        <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="2">
+            <CheckBox x:Name="ChkShowPoints" Grid.Row="0" Grid.Column="0" Content="Show Points" IsChecked="True" Foreground="White"/>
+            <CheckBox x:Name="ChkShowSurfels" Grid.Row="0" Grid.Column="1" Content="Show Surfels" IsChecked="True" Foreground="White"/>
+            <CheckBox x:Name="ChkShowMissRays" Grid.Row="1" Grid.Column="0" Content="Show Miss Rays" IsChecked="False" Foreground="White"/>
+            <CheckBox x:Name="ChkShowNormals" Grid.Row="1" Grid.Column="1" Content="Show Ray Normals" IsChecked="False" Foreground="White"/>
+            <CheckBox x:Name="ChkShowMesh" Grid.Row="2" Grid.Column="0" Content="Show Mesh Preview" IsChecked="False" IsEnabled="False" Foreground="White"/>
+            <CheckBox x:Name="ChkShowGrid" Grid.Row="2" Grid.Column="1" Content="Show Grid" IsChecked="True" Foreground="White"/>
+            <CheckBox x:Name="ChkShowDensityPreview" Grid.Row="3" Grid.Column="0" Content="Show Density Preview" IsChecked="True" Foreground="White"/>
+            <CheckBox x:Name="ChkShowVolume" Grid.Row="3" Grid.Column="1" Content="Show Scan Volume" IsChecked="True" Foreground="White"/>
+            <CheckBox x:Name="ChkDynamicColor" Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Content="Use Dynamic Color Mapping" IsChecked="False" Foreground="White"/>
+        </Grid>
+
+        <TextBlock Text="Surfel Size Multiplier" Foreground="LightGray" Margin="0,4,0,0"/>
+        <Slider x:Name="SldSurfelSize" Minimum="0.1" Maximum="5.0" Value="1.0"/>
+    </StackPanel>
+</UserControl>

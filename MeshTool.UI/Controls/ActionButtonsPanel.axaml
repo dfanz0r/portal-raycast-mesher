@@ -1,0 +1,11 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MeshTool.UI.Controls.ActionButtonsPanel">
+    <StackPanel Spacing="6">
+        <Separator Background="{StaticResource EngineBorderBrush}" Margin="0,8" Height="1"/>
+        <Button x:Name="BtnMonitor" Content="Start Monitor" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+        <Button x:Name="BtnGenerateMesh" Content="Generate Mesh" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+        <Button x:Name="BtnSaveMesh" Content="Save Mesh..." HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" IsEnabled="False"/>
+        <ProgressBar x:Name="PrgProcessing" IsIndeterminate="True" IsVisible="False" Height="4" Margin="0,4,0,0"/>
+    </StackPanel>
+</UserControl>

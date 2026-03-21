@@ -1,0 +1,29 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MeshTool.UI.Controls.ConsoleOutputPanel"
+             IsVisible="False">
+    <Border Background="{StaticResource EnginePanelBgBrush}" BorderBrush="{StaticResource EngineBorderBrush}" BorderThickness="0,1,0,0">
+        <Grid RowDefinitions="Auto,*">
+            <Border Grid.Row="0" Background="{StaticResource EngineControlBgBrush}" Padding="8,4">
+                <Grid ColumnDefinitions="Auto,*,Auto">
+                    <TextBlock Grid.Column="0" Text="Console Output" FontWeight="SemiBold" Foreground="{StaticResource EngineTextLightBrush}" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="1" x:Name="TxtConsoleCount" Text="" Foreground="#888888" VerticalAlignment="Center" HorizontalAlignment="Center" FontSize="11"/>
+                    <Button Grid.Column="2" x:Name="BtnClearConsole" Content="Clear" Padding="8,2" FontSize="11"/>
+                </Grid>
+            </Border>
+            <ListBox Grid.Row="1" x:Name="LstConsole" Padding="4" Background="{StaticResource EngineBgBrush}" BorderThickness="0" Foreground="LightGreen" FontSize="12" FontFamily="Consolas" ScrollViewer.HorizontalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollBarVisibility="Auto" MaxHeight="150">
+                <ListBox.Styles>
+                    <Style Selector="ListBoxItem">
+                        <Setter Property="Padding" Value="5,1"/>
+                        <Setter Property="MinHeight" Value="18"/>
+                    </Style>
+                </ListBox.Styles>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" TextWrapping="NoWrap" LineHeight="16" />
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Grid>
+    </Border>
+</UserControl>

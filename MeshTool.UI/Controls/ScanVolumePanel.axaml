@@ -1,0 +1,55 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MeshTool.UI.Controls.ScanVolumePanel">
+    <StackPanel Spacing="6">
+        <Separator Background="{StaticResource EngineBorderBrush}" Margin="0,8" Height="1"/>
+        <TextBlock Text="Scan Volume" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource EngineTextLightBrush}" Margin="0,0,0,4"/>
+        <StackPanel Spacing="4">
+            <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
+                <TextBlock Grid.Column="0" Text="Center" Foreground="LightGray" VerticalAlignment="Center"/>
+                <Border x:Name="HandleCenterX" Grid.Column="1" Tag="CenterX" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast"><TextBlock Text="X" Foreground="#F87171" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                <TextBox Classes="scanValue" x:Name="TxtScanCenterX" Grid.Column="2" Watermark="X" TextAlignment="Right" HorizontalContentAlignment="Right"/>
+                <Border x:Name="HandleCenterZ" Grid.Column="3" Tag="CenterZ" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast"><TextBlock Text="Z" Foreground="#60A5FA" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                <TextBox Classes="scanValue" x:Name="TxtScanCenterZ" Grid.Column="4" Watermark="Z" TextAlignment="Right" HorizontalContentAlignment="Right"/>
+            </Grid>
+
+            <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
+                <TextBlock Grid.Column="0" Text="Size" Foreground="LightGray" VerticalAlignment="Center"/>
+                <Border x:Name="HandleSizeX" Grid.Column="1" Tag="SizeX" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast"><TextBlock Text="X" Foreground="#F87171" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                <TextBox Classes="scanValue" x:Name="TxtScanSizeX" Grid.Column="2" Watermark="X" TextAlignment="Right" HorizontalContentAlignment="Right"/>
+                <Border x:Name="HandleSizeZ" Grid.Column="3" Tag="SizeZ" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast"><TextBlock Text="Z" Foreground="#60A5FA" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                <TextBox Classes="scanValue" x:Name="TxtScanSizeZ" Grid.Column="4" Watermark="Z" TextAlignment="Right" HorizontalContentAlignment="Right"/>
+            </Grid>
+
+            <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
+                <TextBlock Grid.Column="0" Text="Y" Foreground="LightGray" VerticalAlignment="Center"/>
+                <Border x:Name="HandleYTop" Grid.Column="1" Tag="YTop" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast"><TextBlock Text="Top" Foreground="#4ADE80" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                <TextBox Classes="scanValue" x:Name="TxtScanYTop" Grid.Column="2" Watermark="Top" TextAlignment="Right" HorizontalContentAlignment="Right"/>
+                <Border x:Name="HandleYBottom" Grid.Column="3" Tag="YBottom" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast"><TextBlock Text="Bot" Foreground="#4ADE80" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                <TextBox Classes="scanValue" x:Name="TxtScanYBottom" Grid.Column="4" Watermark="Bot" TextAlignment="Right" HorizontalContentAlignment="Right"/>
+            </Grid>
+
+            <Grid ColumnDefinitions="54,44,*,44,*" ColumnSpacing="4">
+                <TextBlock Grid.Column="0" Text="Angles" Foreground="LightGray" VerticalAlignment="Center"/>
+                <Border x:Name="HandleYaw" Grid.Column="1" Tag="Yaw" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast"><TextBlock Text="Yaw" Foreground="#FBBF24" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                <TextBox Classes="scanValue" x:Name="TxtScanYaw" Grid.Column="2" Watermark="Deg" TextAlignment="Right" HorizontalContentAlignment="Right"/>
+                <Border x:Name="HandleRayTilt" Grid.Column="3" Tag="RayTilt" Background="#3A3A3A" CornerRadius="3" MinHeight="28" VerticalAlignment="Center" Cursor="SizeWestEast"><TextBlock Text="Tilt" Foreground="#F59E0B" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                <TextBox Classes="scanValue" x:Name="TxtScanRayTilt" Grid.Column="4" Watermark="Deg" TextAlignment="Right" HorizontalContentAlignment="Right"/>
+            </Grid>
+        </StackPanel>
+
+        <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="3">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Broad Phase Density" Foreground="LightGray" VerticalAlignment="Center"/>
+            <Slider Grid.Row="0" Grid.Column="1" x:Name="SldScanDensity" Margin="0,-8,0,0" VerticalAlignment="Center" Minimum="0" Maximum="1" Value="0.5" ToolTip.Tip="Higher = denser broad phase seeds (smaller probe cell)"/>
+            <TextBlock Grid.Row="0" Grid.Column="2" x:Name="TxtBroadDensityMeters" Text="--- m" Foreground="#A7F3D0" VerticalAlignment="Center" FontFamily="Consolas"/>
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Fine Phase Density" Foreground="LightGray" VerticalAlignment="Center"/>
+            <Slider Grid.Row="1" Grid.Column="1" x:Name="SldFineDensity" Margin="0,-8,0,0" VerticalAlignment="Center" Minimum="0" Maximum="1" Value="0.75" ToolTip.Tip="Higher = denser fine phase refinement (smaller target step)"/>
+            <TextBlock Grid.Row="1" Grid.Column="2" x:Name="TxtFineDensityMeters" Text="--- m" Foreground="#93C5FD" VerticalAlignment="Center" FontFamily="Consolas"/>
+        </Grid>
+
+        <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+            <Button x:Name="BtnResetScanVolume" Grid.Column="0" Content="Reset Volume" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+            <Button x:Name="BtnExportScanTs" Grid.Column="1" Content="Copy Script" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Copy the portal raycast script based on the current view bounding volume"/>
+        </Grid>
+    </StackPanel>
+</UserControl>
