@@ -27,9 +27,8 @@ namespace MeshTool.UI.Rendering
         private OpenGlViewport _viewport;
         private uint _vaoPoints, _vboInstances;
         private uint _vaoSurfels, _vboSurfelVerts;
-        private ShaderProgram? _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramMesh, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints, _shaderProgramFlatColor, _shaderProgramGizmoAccum, _shaderProgramGizmoReveal, _shaderProgramFlatAccum, _shaderProgramFlatReveal;
+        private ShaderProgram? _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints, _shaderProgramFlatColor, _shaderProgramGizmoAccum, _shaderProgramGizmoReveal, _shaderProgramFlatAccum, _shaderProgramFlatReveal;
         private uint _vaoRays;
-        private uint _vaoMesh, _vboMesh;
         private uint _vaoAxes, _vboAxes;
         private uint _vaoScanVolume, _vboScanVolume;
         private int _scanVolumeVertexCount;
@@ -40,7 +39,6 @@ namespace MeshTool.UI.Rendering
         private int _scanDensityBroadCount;
         private uint _vaoSelectionFill, _vboSelectionFill;
         private int _selectionFillVertexCount;
-        private VertexArray? _meshBuffer;
         private VertexArray? _axesBuffer;
         private VertexArray? _scanVolumeBuffer;
         private VertexArray? _scanHandleBuffer;
@@ -49,6 +47,7 @@ namespace MeshTool.UI.Rendering
         private DynamicBuffer? _pointInstanceBuffer;
         private RayRenderer? _rayRenderer;
         private GridRenderer? _gridRenderer;
+        private MeshRenderer? _meshRenderer;
         private bool _scanDensityBufferValid;
         private ScanVolumeSettings _lastDensityScanVolume;
         private float _lastDensityFineTargetStep = -1f;
@@ -123,6 +122,7 @@ namespace MeshTool.UI.Rendering
             _framebufferManager = new OitFramebufferManager(_gl, 4, _viewport.OnLog);
             _gridRenderer = new GridRenderer(_gl, _viewport.OnLog);
             _rayRenderer = new RayRenderer(_gl, _viewport.OnLog);
+            _meshRenderer = new MeshRenderer(_gl, _viewport.OnLog);
 
             InitShaders();
             InitBuffers();
@@ -165,11 +165,6 @@ namespace MeshTool.UI.Rendering
             string fsGizmoReveal = ShaderSource.GizmoRevealFragment;
             _shaderProgramGizmoAccum = new ShaderProgram(_gl, "GizmoAccum", vsGizmoSolid, fsGizmoAccum, _viewport.OnLog);
             _shaderProgramGizmoReveal = new ShaderProgram(_gl, "GizmoReveal", vsGizmoSolid, fsGizmoReveal, _viewport.OnLog);
-
-            // --- MESH SHADER ---
-            string vsMesh = ShaderSource.MeshVertexSimple;
-            string fsMesh = ShaderSource.MeshFragmentSimple;
-            _shaderProgramMesh = new ShaderProgram(_gl, "Mesh", vsMesh, fsMesh, _viewport.OnLog);
 
             string vsFlatColor = ShaderSource.FlatColorVertex;
             string fsFlatColor = ShaderSource.FlatColorFragment;
@@ -254,13 +249,6 @@ namespace MeshTool.UI.Rendering
             _vaoRays = _gl.GenVertexArray();
             _rayRenderer!.ConfigureVao(_vaoRays);
 
-            // Mesh VAO
-            _meshBuffer = new VertexArray(_gl, MeshVertexStride);
-            _vaoMesh = _meshBuffer.VaoHandle;
-            _vboMesh = _meshBuffer.VboHandle;
-            _meshBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
-            _meshBuffer.SetAttribute(1, 3, VertexAttribPointerType.Float, 3 * sizeof(float));
-
             // Axes VAO
             _axesBuffer = new VertexArray(_gl, AxesVertexStride);
             _vaoAxes = _axesBuffer.VaoHandle;
@@ -336,7 +324,7 @@ namespace MeshTool.UI.Rendering
             _framebufferManager?.Dispose();
             _gridRenderer?.Dispose();
             _rayRenderer?.Dispose();
-            _meshBuffer?.Dispose();
+            _meshRenderer?.Dispose();
             _axesBuffer?.Dispose();
             _scanVolumeBuffer?.Dispose();
             _scanHandleBuffer?.Dispose();
@@ -347,13 +335,12 @@ namespace MeshTool.UI.Rendering
             _gl.DeleteVertexArray(_vaoPoints);
             _gl.DeleteVertexArray(_vaoSurfels);
             _gl.DeleteVertexArray(_vaoRays);
-            _vaoMesh = _vaoAxes = _vaoScanVolume = _vaoScanHandles = _vaoScanDensity = _vaoSelectionFill = 0;
-            _vboMesh = _vboAxes = _vboScanVolume = _vboScanHandles = _vboScanDensity = _vboSelectionFill = 0;
+            _vaoAxes = _vaoScanVolume = _vaoScanHandles = _vaoScanDensity = _vaoSelectionFill = 0;
+            _vboAxes = _vboScanVolume = _vboScanHandles = _vboScanDensity = _vboSelectionFill = 0;
             _vboInstances = 0;
             _gl.DeleteBuffer(_vboSurfelVerts);
             _shaderProgramPoints?.Dispose();
             _shaderProgramSurfels?.Dispose();
-            _shaderProgramMesh?.Dispose();
             _shaderProgramAxes?.Dispose();
             _shaderProgramGizmoSolid?.Dispose();
             _shaderProgramDensityPoints?.Dispose();
@@ -603,7 +590,7 @@ namespace MeshTool.UI.Rendering
                     if (_pendingMeshRawBuffer != null)
                     {
                         _meshVertexCount = _pendingMeshRawVertexCount;
-                        _meshBuffer!.UploadData(_pendingMeshRawBuffer, _meshVertexCount, BufferUsageARB.StaticDraw);
+                        _meshRenderer!.UploadRaw(_pendingMeshRawBuffer, _meshVertexCount);
                         ArrayPool<float>.Shared.Return(_pendingMeshRawBuffer);
                         _pendingMeshRawBuffer = null;
                     }
@@ -867,60 +854,7 @@ namespace MeshTool.UI.Rendering
             {
                 if (pendingMesh != null)
                 {
-                    _meshVertexCount = pendingMesh.Count * 3;
-                    if (_meshVertexCount > 0)
-                    {
-                        int meshFloatCount = _meshVertexCount * 6;
-                        float[] meshData = ArrayPool<float>.Shared.Rent(meshFloatCount);
-                        try
-                        {
-                            for (int i = 0; i < pendingMesh.Count; i++)
-                            {
-                                var t = pendingMesh[i];
-                                var edge1 = t.B.Position - t.A.Position;
-                                var edge2 = t.C.Position - t.A.Position;
-                                var n = edge1.Cross(edge2);
-                                double len = Math.Sqrt(n.X * n.X + n.Y * n.Y + n.Z * n.Z);
-                                if (len > 1e-7)
-                                {
-                                    n.X /= len;
-                                    n.Y /= len;
-                                    n.Z /= len;
-                                }
-                                else
-                                {
-                                    n = new MeshTool.Core.Data.Vector3(0, 1, 0);
-                                }
-
-                                meshData[i * 18 + 0] = (float)t.A.Position.X;
-                                meshData[i * 18 + 1] = (float)t.A.Position.Y;
-                                meshData[i * 18 + 2] = (float)t.A.Position.Z;
-                                meshData[i * 18 + 3] = (float)n.X;
-                                meshData[i * 18 + 4] = (float)n.Y;
-                                meshData[i * 18 + 5] = (float)n.Z;
-
-                                meshData[i * 18 + 6] = (float)t.B.Position.X;
-                                meshData[i * 18 + 7] = (float)t.B.Position.Y;
-                                meshData[i * 18 + 8] = (float)t.B.Position.Z;
-                                meshData[i * 18 + 9] = (float)n.X;
-                                meshData[i * 18 + 10] = (float)n.Y;
-                                meshData[i * 18 + 11] = (float)n.Z;
-
-                                meshData[i * 18 + 12] = (float)t.C.Position.X;
-                                meshData[i * 18 + 13] = (float)t.C.Position.Y;
-                                meshData[i * 18 + 14] = (float)t.C.Position.Z;
-                                meshData[i * 18 + 15] = (float)n.X;
-                                meshData[i * 18 + 16] = (float)n.Y;
-                                meshData[i * 18 + 17] = (float)n.Z;
-                            }
-
-                            _meshBuffer!.UploadData(meshData, _meshVertexCount, BufferUsageARB.StaticDraw);
-                        }
-                        finally
-                        {
-                            ArrayPool<float>.Shared.Return(meshData);
-                        }
-                    }
+                    _meshRenderer!.UploadTriangles(pendingMesh, out _meshVertexCount);
                 }
                 else
                 {
@@ -1024,11 +958,7 @@ namespace MeshTool.UI.Rendering
             // 3. Draw Mesh
             if (_viewport.ShowMesh && _meshVertexCount > 0)
             {
-                _gl.UseProgram(_shaderProgramMesh!.Handle);
-                SetUniforms(_shaderProgramMesh, view, proj);
-
-                _gl.BindVertexArray(_vaoMesh);
-                _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_meshVertexCount);
+                _meshRenderer!.Render(view, proj, _meshVertexCount);
             }
 
             // 4. Draw Axes
