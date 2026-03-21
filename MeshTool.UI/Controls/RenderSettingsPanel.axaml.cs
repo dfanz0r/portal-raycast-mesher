@@ -1,4 +1,7 @@
+using System;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 
 namespace MeshTool.UI.Controls;
@@ -16,9 +19,15 @@ public partial class RenderSettingsPanel : UserControl
     private CheckBox? _dynamicColorCheckBox;
     private Slider? _surfelSizeSlider;
 
+    public event EventHandler<RoutedEventArgs>? RenderSettingsChanged;
+    public event EventHandler<RoutedEventArgs>? MeshVisibilityChanged;
+    public event EventHandler<RoutedEventArgs>? DynamicColorChanged;
+    public event EventHandler<RangeBaseValueChangedEventArgs>? SurfelSizeChanged;
+
     public RenderSettingsPanel()
     {
         InitializeComponent();
+        WireEvents();
     }
 
     public CheckBox ShowPointsCheckBox => _showPointsCheckBox ??= this.FindControl<CheckBox>("ChkShowPoints")!;
@@ -35,5 +44,30 @@ public partial class RenderSettingsPanel : UserControl
     private void InitializeComponent()
     {
         AvaloniaXamlLoader.Load(this);
+    }
+
+    private void WireEvents()
+    {
+        ShowPointsCheckBox.IsCheckedChanged += OnRenderSettingsChanged;
+        ShowSurfelsCheckBox.IsCheckedChanged += OnRenderSettingsChanged;
+        ShowMissRaysCheckBox.IsCheckedChanged += OnRenderSettingsChanged;
+        ShowNormalsCheckBox.IsCheckedChanged += OnRenderSettingsChanged;
+        ShowGridCheckBox.IsCheckedChanged += OnRenderSettingsChanged;
+        ShowDensityPreviewCheckBox.IsCheckedChanged += OnRenderSettingsChanged;
+        ShowVolumeCheckBox.IsCheckedChanged += OnRenderSettingsChanged;
+        ShowMeshCheckBox.IsCheckedChanged += (sender, e) => MeshVisibilityChanged?.Invoke(sender, e);
+        DynamicColorCheckBox.IsCheckedChanged += (sender, e) => DynamicColorChanged?.Invoke(sender, e);
+        SurfelSizeSlider.ValueChanged += (sender, e) => SurfelSizeChanged?.Invoke(sender, e);
+    }
+
+    private void OnRenderSettingsChanged(object? sender, RoutedEventArgs e)
+    {
+        RenderSettingsChanged?.Invoke(sender, e);
+    }
+
+    public bool ShowMeshChecked
+    {
+        get => ShowMeshCheckBox.IsChecked ?? false;
+        set => ShowMeshCheckBox.IsChecked = value;
     }
 }

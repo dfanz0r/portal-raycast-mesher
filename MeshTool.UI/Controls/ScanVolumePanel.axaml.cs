@@ -1,13 +1,23 @@
+using System;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 
 namespace MeshTool.UI.Controls;
 
 public partial class ScanVolumePanel : UserControl
 {
+    public event EventHandler<RoutedEventArgs>? ResetRequested;
+    public event EventHandler<RoutedEventArgs>? ExportScriptRequested;
+    public event Action<object?, PointerPressedEventArgs>? HandlePointerPressed;
+    public event Action<object?, PointerEventArgs>? HandlePointerMoved;
+    public event Action<object?, PointerReleasedEventArgs>? HandlePointerReleased;
+
     public ScanVolumePanel()
     {
         InitializeComponent();
+        WireEvents();
     }
 
     public TextBox ScanCenterXTextBox => this.FindControl<TextBox>("TxtScanCenterX")!;
@@ -39,5 +49,33 @@ public partial class ScanVolumePanel : UserControl
     private void InitializeComponent()
     {
         AvaloniaXamlLoader.Load(this);
+    }
+
+    private void WireEvents()
+    {
+        ResetScanVolumeButton.Click += (sender, e) => ResetRequested?.Invoke(sender, e);
+        ExportScanScriptButton.Click += (sender, e) => ExportScriptRequested?.Invoke(sender, e);
+
+        foreach (var handle in ScanHandleBorders)
+        {
+            handle.PointerPressed += (sender, e) => HandlePointerPressed?.Invoke(sender, e);
+            handle.PointerMoved += (sender, e) => HandlePointerMoved?.Invoke(sender, e);
+            handle.PointerReleased += (sender, e) => HandlePointerReleased?.Invoke(sender, e);
+        }
+    }
+
+    public void SetEditingEnabled(bool enabled)
+    {
+        ScanCenterXTextBox.IsEnabled = enabled;
+        ScanCenterZTextBox.IsEnabled = enabled;
+        ScanSizeXTextBox.IsEnabled = enabled;
+        ScanSizeZTextBox.IsEnabled = enabled;
+        ScanYTopTextBox.IsEnabled = enabled;
+        ScanYBottomTextBox.IsEnabled = enabled;
+        ScanYawTextBox.IsEnabled = enabled;
+        ScanRayTiltTextBox.IsEnabled = enabled;
+        ScanDensitySlider.IsEnabled = enabled;
+        FineDensitySlider.IsEnabled = enabled;
+        ResetScanVolumeButton.IsEnabled = enabled;
     }
 }

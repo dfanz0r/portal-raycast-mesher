@@ -44,26 +44,7 @@
                 <!-- Header -->
                 <TextBlock Text="MeshTool" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource EngineTextLightBrush}" VerticalAlignment="Center"/>
                 
-                <TextBlock Text="Database Path" Foreground="LightGray" />
-                <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="5" RowSpacing="5">
-                    <ComboBox x:Name="CmbDbPath" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" PlaceholderText="Select .db file" SelectionChanged="CmbDbPath_SelectionChanged"/>
-                    <Button Grid.Row="0" Grid.Column="1" x:Name="BtnBrowseDb" Content="..." Click="BtnBrowseDb_Click"/>
-                    <Button Grid.Row="0" Grid.Column="2" x:Name="BtnMesh" Content="Load" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" Click="BtnMesh_Click"/>
-
-                    <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" ColumnDefinitions="*,*" ColumnSpacing="6">
-                        <Button Grid.Column="0" x:Name="BtnClearDb" Content="Clear DB" Click="BtnClearDb_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Clear all points/rays and overwrite the current DB file"/>
-                        <Button Grid.Column="1" x:Name="BtnNewDb" Content="New DB" Click="BtnNewDb_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-                    </Grid>
-                </Grid>
-
-                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="4">
-                    <CheckBox Grid.Row="0" Grid.Column="0" x:Name="ChkPointSelectMode" Content="Point Selection Mode" Foreground="White" Checked="ChkPointSelectMode_Changed" Unchecked="ChkPointSelectMode_Changed" ToolTip.Tip="Shortcut: G toggles selection mode. Hold Shift while dragging to add multiple areas. Delete removes selected points."/>
-                    <TextBlock Grid.Row="0" Grid.Column="1" x:Name="TxtSelectedPoints" Text="Selected: 0" Foreground="#F5A9FF" VerticalAlignment="Center" HorizontalAlignment="Right" FontFamily="Consolas"/>
-                    <Button Grid.Row="1" Grid.Column="0" x:Name="BtnDeleteSelectedPoints" Content="Delete Selected" Click="BtnDeleteSelectedPoints_Click" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-                    <Button Grid.Row="1" Grid.Column="1" x:Name="BtnClearSelectedPoints" Content="Clear Selected" Click="BtnClearSelectedPoints_Click" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-                    <Button Grid.Row="2" Grid.Column="0" x:Name="BtnSelectionSave" Content="Save Selection" Click="BtnSelectionSave_Click" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-                    <Button Grid.Row="2" Grid.Column="1" x:Name="BtnSelectionDiscard" Content="Discard Selection" Click="BtnSelectionDiscard_Click" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-                </Grid>
+                <controls:DatabasePanel x:Name="DatabasePanel"/>
 
                 <controls:ScanVolumePanel x:Name="ScanPanel"/>
                 <controls:ActionButtonsPanel x:Name="ActionPanel"/>

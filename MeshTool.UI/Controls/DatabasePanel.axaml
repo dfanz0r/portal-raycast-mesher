@@ -1,0 +1,26 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MeshTool.UI.Controls.DatabasePanel">
+    <StackPanel Spacing="6">
+        <TextBlock Text="Database Path" Foreground="LightGray" />
+        <Grid ColumnDefinitions="*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="5" RowSpacing="5">
+            <ComboBox x:Name="CmbDbPath" Grid.Row="0" Grid.Column="0" HorizontalAlignment="Stretch" PlaceholderText="Select .db file"/>
+            <Button Grid.Row="0" Grid.Column="1" x:Name="BtnBrowseDb" Content="..."/>
+            <Button Grid.Row="0" Grid.Column="2" x:Name="BtnMesh" Content="Load" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+
+            <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" ColumnDefinitions="*,*" ColumnSpacing="6">
+                <Button Grid.Column="0" x:Name="BtnClearDb" Content="Clear DB" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Clear all points/rays and overwrite the current DB file"/>
+                <Button Grid.Column="1" x:Name="BtnNewDb" Content="New DB" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+            </Grid>
+        </Grid>
+
+        <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="4">
+            <CheckBox Grid.Row="0" Grid.Column="0" x:Name="ChkPointSelectMode" Content="Point Selection Mode" Foreground="White" ToolTip.Tip="Shortcut: G toggles selection mode. Hold Shift while dragging to add multiple areas. Delete removes selected points."/>
+            <TextBlock Grid.Row="0" Grid.Column="1" x:Name="TxtSelectedPoints" Text="Selected: 0" Foreground="#F5A9FF" VerticalAlignment="Center" HorizontalAlignment="Right" FontFamily="Consolas"/>
+            <Button Grid.Row="1" Grid.Column="0" x:Name="BtnDeleteSelectedPoints" Content="Delete Selected" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+            <Button Grid.Row="1" Grid.Column="1" x:Name="BtnClearSelectedPoints" Content="Clear Selected" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+            <Button Grid.Row="2" Grid.Column="0" x:Name="BtnSelectionSave" Content="Save Selection" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+            <Button Grid.Row="2" Grid.Column="1" x:Name="BtnSelectionDiscard" Content="Discard Selection" IsEnabled="False" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+        </Grid>
+    </StackPanel>
+</UserControl>

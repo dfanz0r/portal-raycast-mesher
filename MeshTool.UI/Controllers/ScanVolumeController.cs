@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using MeshTool.Core.Config;
+using MeshTool.UI.Controls;
 using MeshTool.UI.Models;
 
 namespace MeshTool.UI.Controllers
@@ -53,26 +54,20 @@ namespace MeshTool.UI.Controllers
         /// <summary>
         /// Initializes a new instance of the ScanVolumeController.
         /// </summary>
-        public ScanVolumeController(
-            TextBox txtCenterX, TextBox txtCenterZ,
-            TextBox txtSizeX, TextBox txtSizeZ,
-            TextBox txtYTop, TextBox txtYBottom,
-            TextBox txtYaw, TextBox txtRayTilt,
-            Slider sldDensity, Slider sldFineDensity,
-            TextBlock txtBroadMeters, TextBlock txtFineMeters)
+        public ScanVolumeController(ScanVolumePanel panel)
         {
-            _txtCenterX = txtCenterX;
-            _txtCenterZ = txtCenterZ;
-            _txtSizeX = txtSizeX;
-            _txtSizeZ = txtSizeZ;
-            _txtYTop = txtYTop;
-            _txtYBottom = txtYBottom;
-            _txtYaw = txtYaw;
-            _txtRayTilt = txtRayTilt;
-            _sldDensity = sldDensity;
-            _sldFineDensity = sldFineDensity;
-            _txtBroadMeters = txtBroadMeters;
-            _txtFineMeters = txtFineMeters;
+            _txtCenterX = panel.ScanCenterXTextBox;
+            _txtCenterZ = panel.ScanCenterZTextBox;
+            _txtSizeX = panel.ScanSizeXTextBox;
+            _txtSizeZ = panel.ScanSizeZTextBox;
+            _txtYTop = panel.ScanYTopTextBox;
+            _txtYBottom = panel.ScanYBottomTextBox;
+            _txtYaw = panel.ScanYawTextBox;
+            _txtRayTilt = panel.ScanRayTiltTextBox;
+            _sldDensity = panel.ScanDensitySlider;
+            _sldFineDensity = panel.FineDensitySlider;
+            _txtBroadMeters = panel.BroadDensityTextBlock;
+            _txtFineMeters = panel.FineDensityTextBlock;
 
             AttachEventHandlers();
         }
