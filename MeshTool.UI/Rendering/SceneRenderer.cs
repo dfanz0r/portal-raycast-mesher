@@ -27,8 +27,8 @@ namespace MeshTool.UI.Rendering
         private OpenGlViewport _viewport;
         private uint _vaoPoints, _vboInstances;
         private uint _vaoSurfels, _vboSurfelVerts;
-        private ShaderProgram? _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramRayAccum, _shaderProgramRayReveal, _shaderProgramMesh, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints, _shaderProgramFlatColor, _shaderProgramGizmoAccum, _shaderProgramGizmoReveal, _shaderProgramFlatAccum, _shaderProgramFlatReveal;
-        private uint _vaoRays, _vboRays;
+        private ShaderProgram? _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramMesh, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints, _shaderProgramFlatColor, _shaderProgramGizmoAccum, _shaderProgramGizmoReveal, _shaderProgramFlatAccum, _shaderProgramFlatReveal;
+        private uint _vaoRays;
         private uint _vaoMesh, _vboMesh;
         private uint _vaoAxes, _vboAxes;
         private uint _vaoScanVolume, _vboScanVolume;
@@ -47,7 +47,7 @@ namespace MeshTool.UI.Rendering
         private VertexArray? _scanDensityBuffer;
         private VertexArray? _selectionFillBuffer;
         private DynamicBuffer? _pointInstanceBuffer;
-        private DynamicBuffer? _rayBuffer;
+        private RayRenderer? _rayRenderer;
         private GridRenderer? _gridRenderer;
         private bool _scanDensityBufferValid;
         private ScanVolumeSettings _lastDensityScanVolume;
@@ -122,6 +122,7 @@ namespace MeshTool.UI.Rendering
 
             _framebufferManager = new OitFramebufferManager(_gl, 4, _viewport.OnLog);
             _gridRenderer = new GridRenderer(_gl, _viewport.OnLog);
+            _rayRenderer = new RayRenderer(_gl, _viewport.OnLog);
 
             InitShaders();
             InitBuffers();
@@ -146,13 +147,6 @@ namespace MeshTool.UI.Rendering
                     FragColor = vec4(diffuse, 1.0);
                 }";
             _shaderProgramSurfels = new ShaderProgram(_gl, "Surfel", vsSurfel, fsSurfel, _viewport.OnLog);
-
-            // --- RAY SHADERS (Weighted Blended OIT) ---
-            string vsRay = ShaderSource.RayOitVertex;
-            string fsRayAccum = ShaderSource.RayOitAccumFragment;
-            string fsRayReveal = ShaderSource.RayOitRevealFragment;
-            _shaderProgramRayAccum = new ShaderProgram(_gl, "RayAccum", vsRay, fsRayAccum, _viewport.OnLog);
-            _shaderProgramRayReveal = new ShaderProgram(_gl, "RayReveal", vsRay, fsRayReveal, _viewport.OnLog);
 
             // --- AXES SHADER ---
             string vsAxes = ShaderSource.AxesVertex;
@@ -195,9 +189,7 @@ namespace MeshTool.UI.Rendering
         private unsafe void InitBuffers()
         {
             _pointInstanceBuffer = new DynamicBuffer(_gl, PointInstanceStride);
-            _rayBuffer = new DynamicBuffer(_gl, RayVertexStride * 2);
             _vboInstances = _pointInstanceBuffer.Handle;
-            _vboRays = _rayBuffer.Handle;
 
             // Points VAO
             _vaoPoints = _gl.GenVertexArray();
@@ -260,14 +252,7 @@ namespace MeshTool.UI.Rendering
 
             // Rays VAO
             _vaoRays = _gl.GenVertexArray();
-            _gl.BindVertexArray(_vaoRays);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, RayVertexStride, (void*)0);
-            _gl.EnableVertexAttribArray(0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, RayVertexStride, (void*)(3 * sizeof(float)));
-            _gl.EnableVertexAttribArray(1);
-            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, RayVertexStride, (void*)(6 * sizeof(float)));
-            _gl.EnableVertexAttribArray(2);
+            _rayRenderer!.ConfigureVao(_vaoRays);
 
             // Mesh VAO
             _meshBuffer = new VertexArray(_gl, MeshVertexStride);
@@ -328,7 +313,6 @@ namespace MeshTool.UI.Rendering
             _gl.BindVertexArray(0);
 
             RebindPointVaos();
-            RebindRayVao();
         }
 
         private unsafe void RebindPointVaos()
@@ -347,19 +331,11 @@ namespace MeshTool.UI.Rendering
             _gl.VertexAttribPointer(4, 1, VertexAttribPointerType.Float, false, PointInstanceStride, (void*)(7 * sizeof(float)));
         }
 
-        private unsafe void RebindRayVao()
-        {
-            _gl.BindVertexArray(_vaoRays);
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboRays);
-            _gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, RayVertexStride, (void*)0);
-            _gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, RayVertexStride, (void*)(3 * sizeof(float)));
-            _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, RayVertexStride, (void*)(6 * sizeof(float)));
-        }
-
         public void Deinit()
         {
             _framebufferManager?.Dispose();
             _gridRenderer?.Dispose();
+            _rayRenderer?.Dispose();
             _meshBuffer?.Dispose();
             _axesBuffer?.Dispose();
             _scanVolumeBuffer?.Dispose();
@@ -367,19 +343,16 @@ namespace MeshTool.UI.Rendering
             _scanDensityBuffer?.Dispose();
             _selectionFillBuffer?.Dispose();
             _pointInstanceBuffer?.Dispose();
-            _rayBuffer?.Dispose();
 
             _gl.DeleteVertexArray(_vaoPoints);
             _gl.DeleteVertexArray(_vaoSurfels);
             _gl.DeleteVertexArray(_vaoRays);
             _vaoMesh = _vaoAxes = _vaoScanVolume = _vaoScanHandles = _vaoScanDensity = _vaoSelectionFill = 0;
             _vboMesh = _vboAxes = _vboScanVolume = _vboScanHandles = _vboScanDensity = _vboSelectionFill = 0;
-            _vboInstances = _vboRays = 0;
+            _vboInstances = 0;
             _gl.DeleteBuffer(_vboSurfelVerts);
             _shaderProgramPoints?.Dispose();
             _shaderProgramSurfels?.Dispose();
-            _shaderProgramRayAccum?.Dispose();
-            _shaderProgramRayReveal?.Dispose();
             _shaderProgramMesh?.Dispose();
             _shaderProgramAxes?.Dispose();
             _shaderProgramGizmoSolid?.Dispose();
@@ -707,74 +680,15 @@ namespace MeshTool.UI.Rendering
                 if (_rayCount > _rayCapacity)
                 {
                     _rayCapacity = Math.Max(_rayCapacity * 2, _rayCount + 10000);
-                    if (_rayBuffer!.EnsureCapacity(_rayCapacity))
+                    if (_rayRenderer!.EnsureCapacity(_rayCapacity))
                     {
-                        _vboRays = _rayBuffer.Handle;
-                        RebindRayVao();
+                        _rayRenderer.ConfigureVao(_vaoRays);
                     }
                 }
 
                 if (_rayCount > 0)
                 {
-                    int rayFloatCount = _rayCount * 14;
-                    float[] rayData = ArrayPool<float>.Shared.Rent(rayFloatCount);
-                    try
-                    {
-                        // Miss rays (Red)
-                        for (int i = 0; i < rays.Length; i++)
-                        {
-                            int idx = i * 14;
-                            rayData[idx + 0] = (float)rays[i].Start.X; rayData[idx + 1] = (float)rays[i].Start.Y; rayData[idx + 2] = (float)rays[i].Start.Z;
-                            rayData[idx + 3] = 1f; rayData[idx + 4] = 0f; rayData[idx + 5] = 0f;
-                            rayData[idx + 6] = rays[i].SpawnTime;
-
-                            rayData[idx + 7] = (float)rays[i].End.X; rayData[idx + 8] = (float)rays[i].End.Y; rayData[idx + 9] = (float)rays[i].End.Z;
-                            rayData[idx + 10] = 1f; rayData[idx + 11] = 0f; rayData[idx + 12] = 0f;
-                            rayData[idx + 13] = rays[i].SpawnTime;
-                        }
-
-                        // Point normals (Yellow) - fixed length for stable visualization.
-                        int offset = rays.Length * 14;
-                        const float normalLen = 300.0f;
-                        for (int i = 0; i < _pointCount; i++)
-                        {
-                            int idx = offset + i * 14;
-                            float px = (float)points[i].Position.X;
-                            float py = (float)points[i].Position.Y;
-                            float pz = (float)points[i].Position.Z;
-
-                            float nx = (float)points[i].Normal.X;
-                            float ny = (float)points[i].Normal.Y;
-                            float nz = (float)points[i].Normal.Z;
-                            float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
-                            if (nLen > 0.00001f)
-                            {
-                                nx /= nLen;
-                                ny /= nLen;
-                                nz /= nLen;
-                            }
-                            else
-                            {
-                                nx = 0f;
-                                ny = 1f;
-                                nz = 0f;
-                            }
-
-                            rayData[idx + 0] = px; rayData[idx + 1] = py; rayData[idx + 2] = pz;
-                            rayData[idx + 3] = 1f; rayData[idx + 4] = 1f; rayData[idx + 5] = 0f;
-                            rayData[idx + 6] = 0f;
-
-                            rayData[idx + 7] = px + nx * normalLen; rayData[idx + 8] = py + ny * normalLen; rayData[idx + 9] = pz + nz * normalLen;
-                            rayData[idx + 10] = 1f; rayData[idx + 11] = 1f; rayData[idx + 12] = 0f;
-                            rayData[idx + 13] = 0f;
-                        }
-
-                        _rayBuffer!.UploadSubData(rayData, 0, _rayCount);
-                    }
-                    finally
-                    {
-                        ArrayPool<float>.Shared.Return(rayData);
-                    }
+                    _rayRenderer!.UploadFull(points, rays, _pointCount, _rayCount);
                 }
 
                 _allPoints.Clear();
@@ -859,114 +773,28 @@ namespace MeshTool.UI.Rendering
                     if (newRayCount > _rayCapacity)
                     {
                         int newCapacity = Math.Max(_rayCapacity * 2, newRayCount + 10000);
-                        if (_rayBuffer!.EnsureCapacity(newCapacity))
+                        if (_rayRenderer!.EnsureCapacity(newCapacity))
                         {
-                            _vboRays = _rayBuffer.Handle;
-                            RebindRayVao();
+                            _rayRenderer.ConfigureVao(_vaoRays);
                         }
                         _rayCapacity = newCapacity;
                     }
 
-                    int bytesPerRay = 14 * sizeof(float);
                     if (addedMisses > 0 && oldPointCount > 0)
                     {
-                        uint tempVbo = _gl.GenBuffer();
-                        int normalBytes = oldPointCount * bytesPerRay;
-                        try
-                        {
-                            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, tempVbo);
-                            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)normalBytes, null, BufferUsageARB.DynamicDraw);
-
-                            nint oldNormalsOffset = (nint)(oldMissRayCount * bytesPerRay);
-                            _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, _vboRays);
-                            _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, tempVbo);
-                            _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, oldNormalsOffset, 0, (nuint)normalBytes);
-
-                            nint shiftedNormalsOffset = (nint)((oldMissRayCount + addedMisses) * bytesPerRay);
-                            _gl.BindBuffer(BufferTargetARB.CopyReadBuffer, tempVbo);
-                            _gl.BindBuffer(BufferTargetARB.CopyWriteBuffer, _vboRays);
-                            _gl.CopyBufferSubData(CopyBufferSubDataTarget.CopyReadBuffer, CopyBufferSubDataTarget.CopyWriteBuffer, 0, shiftedNormalsOffset, (nuint)normalBytes);
-                        }
-                        finally
-                        {
-                            _gl.DeleteBuffer(tempVbo);
-                        }
+                        _rayRenderer!.ShiftExistingNormalRays(oldMissRayCount, oldPointCount, addedMisses);
                     }
 
                     if (addedMisses > 0)
                     {
-                        int missFloatCount = addedMisses * 14;
-                        float[] missData = ArrayPool<float>.Shared.Rent(missFloatCount);
-                        try
-                        {
-                            for (int i = 0; i < addedMisses; i++)
-                            {
-                                int idx = i * 14;
-                                missData[idx + 0] = (float)newMisses![i].Start.X; missData[idx + 1] = (float)newMisses[i].Start.Y; missData[idx + 2] = (float)newMisses[i].Start.Z;
-                                missData[idx + 3] = 1f; missData[idx + 4] = 0f; missData[idx + 5] = 0f;
-                                missData[idx + 6] = newMisses[i].SpawnTime;
-
-                                missData[idx + 7] = (float)newMisses[i].End.X; missData[idx + 8] = (float)newMisses[i].End.Y; missData[idx + 9] = (float)newMisses[i].End.Z;
-                                missData[idx + 10] = 1f; missData[idx + 11] = 0f; missData[idx + 12] = 0f;
-                                missData[idx + 13] = newMisses[i].SpawnTime;
-                            }
-
-                            _rayBuffer!.UploadSubData(missData, oldMissRayCount, addedMisses);
-                        }
-                        finally
-                        {
-                            ArrayPool<float>.Shared.Return(missData);
-                        }
+                        _rayRenderer!.UploadMissRays(newMisses, oldMissRayCount);
                     }
 
                     if (addedPoints > 0)
                     {
-                        int normalFloatCount = addedPoints * 14;
-                        float[] rayData = ArrayPool<float>.Shared.Rent(normalFloatCount);
-                        try
-                        {
-                            const float normalLen = 300.0f;
-                            for (int i = 0; i < addedPoints; i++)
-                            {
-                                int idx = i * 14;
-                                float px = (float)newPoints![i].Position.X;
-                                float py = (float)newPoints[i].Position.Y;
-                                float pz = (float)newPoints[i].Position.Z;
-
-                                float nx = (float)newPoints[i].Normal.X;
-                                float ny = (float)newPoints[i].Normal.Y;
-                                float nz = (float)newPoints[i].Normal.Z;
-                                float nLen = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
-                                if (nLen > 0.00001f)
-                                {
-                                    nx /= nLen;
-                                    ny /= nLen;
-                                    nz /= nLen;
-                                }
-                                else
-                                {
-                                    nx = 0f;
-                                    ny = 1f;
-                                    nz = 0f;
-                                }
-
-                                rayData[idx + 0] = px; rayData[idx + 1] = py; rayData[idx + 2] = pz;
-                                rayData[idx + 3] = 1f; rayData[idx + 4] = 1f; rayData[idx + 5] = 0f;
-                                rayData[idx + 6] = 0f;
-
-                                rayData[idx + 7] = px + nx * normalLen; rayData[idx + 8] = py + ny * normalLen; rayData[idx + 9] = pz + nz * normalLen;
-                                rayData[idx + 10] = 1f; rayData[idx + 11] = 1f; rayData[idx + 12] = 0f;
-                                rayData[idx + 13] = 0f;
-                            }
-
-                            int oldNormalCount = oldPointCount;
-                            int normalInsertRayIndex = oldMissRayCount + addedMisses + oldNormalCount;
-                            _rayBuffer!.UploadSubData(rayData, normalInsertRayIndex, addedPoints);
-                        }
-                        finally
-                        {
-                            ArrayPool<float>.Shared.Return(rayData);
-                        }
+                        int oldNormalCount = oldPointCount;
+                        int normalInsertRayIndex = oldMissRayCount + addedMisses + oldNormalCount;
+                        _rayRenderer!.UploadNormalRays(newPoints, normalInsertRayIndex);
                     }
 
                     _rayCount = newRayCount;
@@ -1326,20 +1154,7 @@ namespace MeshTool.UI.Rendering
 
                 if (hasRays)
                 {
-                    _gl.UseProgram(_shaderProgramRayAccum!.Handle);
-                    SetUniforms(_shaderProgramRayAccum, view, proj);
-                    int timeLocAccum = _shaderProgramRayAccum.GetUniformLocation("uCurrentTime");
-                    _gl.Uniform1(timeLocAccum, currentTime);
-                    _gl.Uniform3(_shaderProgramRayAccum.GetUniformLocation("uCameraPos"), camPos.X, camPos.Y, camPos.Z);
-                    _gl.BindVertexArray(_vaoRays);
-                    if (hasMissRays)
-                    {
-                        _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)(_missRayCount * 2));
-                    }
-                    if (hasNormalRays)
-                    {
-                        _gl.DrawArrays(PrimitiveType.Lines, _missRayCount * 2, (uint)(_pointCount * 2));
-                    }
+                    _rayRenderer!.RenderAccum(view, proj, camPos, currentTime, _vaoRays, _missRayCount, _pointCount, hasMissRays, hasNormalRays);
                 }
 
                 if (hasSelectionFill)
@@ -1375,20 +1190,7 @@ namespace MeshTool.UI.Rendering
 
                 if (hasRays)
                 {
-                    _gl.UseProgram(_shaderProgramRayReveal!.Handle);
-                    SetUniforms(_shaderProgramRayReveal, view, proj);
-                    int timeLocReveal = _shaderProgramRayReveal.GetUniformLocation("uCurrentTime");
-                    _gl.Uniform1(timeLocReveal, currentTime);
-                    _gl.Uniform3(_shaderProgramRayReveal.GetUniformLocation("uCameraPos"), camPos.X, camPos.Y, camPos.Z);
-                    _gl.BindVertexArray(_vaoRays);
-                    if (hasMissRays)
-                    {
-                        _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)(_missRayCount * 2));
-                    }
-                    if (hasNormalRays)
-                    {
-                        _gl.DrawArrays(PrimitiveType.Lines, _missRayCount * 2, (uint)(_pointCount * 2));
-                    }
+                    _rayRenderer!.RenderReveal(view, proj, camPos, currentTime, _vaoRays, _missRayCount, _pointCount, hasMissRays, hasNormalRays);
                 }
 
                 if (hasSelectionFill)
