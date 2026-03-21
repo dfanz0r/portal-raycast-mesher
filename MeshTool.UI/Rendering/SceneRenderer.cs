@@ -27,32 +27,15 @@ namespace MeshTool.UI.Rendering
         private OpenGlViewport _viewport;
         private uint _vaoPoints, _vboInstances;
         private uint _vaoSurfels, _vboSurfelVerts;
-        private ShaderProgram? _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramAxes, _shaderProgramGizmoSolid, _shaderProgramDensityPoints, _shaderProgramFlatColor, _shaderProgramGizmoAccum, _shaderProgramGizmoReveal, _shaderProgramFlatAccum, _shaderProgramFlatReveal;
+        private ShaderProgram? _shaderProgramPoints, _shaderProgramSurfels, _shaderProgramAxes, _shaderProgramFlatColor;
         private uint _vaoRays;
         private uint _vaoAxes, _vboAxes;
-        private uint _vaoScanVolume, _vboScanVolume;
-        private int _scanVolumeVertexCount;
-        private uint _vaoScanHandles, _vboScanHandles;
-        private int _scanHandleVertexCount;
-        private uint _vaoScanDensity, _vboScanDensity;
-        private int _scanDensityVertexCount;
-        private int _scanDensityBroadCount;
-        private uint _vaoSelectionFill, _vboSelectionFill;
-        private int _selectionFillVertexCount;
         private VertexArray? _axesBuffer;
-        private VertexArray? _scanVolumeBuffer;
-        private VertexArray? _scanHandleBuffer;
-        private VertexArray? _scanDensityBuffer;
-        private VertexArray? _selectionFillBuffer;
         private DynamicBuffer? _pointInstanceBuffer;
         private RayRenderer? _rayRenderer;
         private GridRenderer? _gridRenderer;
         private MeshRenderer? _meshRenderer;
-        private bool _scanDensityBufferValid;
-        private ScanVolumeSettings _lastDensityScanVolume;
-        private float _lastDensityFineTargetStep = -1f;
-        private float _lastDensityGridPlaneY = float.NaN;
-        private Vector3D<float> _lastDensityCameraPos;
+        private VolumeRenderer? _volumeRenderer;
         private int _meshVertexCount;
 
         private int _pointCapacity;
@@ -123,6 +106,7 @@ namespace MeshTool.UI.Rendering
             _gridRenderer = new GridRenderer(_gl, _viewport.OnLog);
             _rayRenderer = new RayRenderer(_gl, _viewport.OnLog);
             _meshRenderer = new MeshRenderer(_gl, _viewport.OnLog);
+            _volumeRenderer = new VolumeRenderer(_gl, _viewport, _viewport.OnLog);
 
             InitShaders();
             InitBuffers();
@@ -153,27 +137,9 @@ namespace MeshTool.UI.Rendering
             string fsAxes = ShaderSource.AxesFragment;
             _shaderProgramAxes = new ShaderProgram(_gl, "Axes", vsAxes, fsAxes, _viewport.OnLog);
 
-            string vsDensityPoints = ShaderSource.DensityPointsVertex;
-            string fsDensityPoints = ShaderSource.DensityPointsFragment;
-            _shaderProgramDensityPoints = new ShaderProgram(_gl, "DensityPoints", vsDensityPoints, fsDensityPoints, _viewport.OnLog);
-
-            string vsGizmoSolid = ShaderSource.GizmoSolidVertex;
-            string fsGizmoSolid = ShaderSource.GizmoSolidFragment;
-            _shaderProgramGizmoSolid = new ShaderProgram(_gl, "GizmoSolid", vsGizmoSolid, fsGizmoSolid, _viewport.OnLog);
-
-            string fsGizmoAccum = ShaderSource.GizmoAccumFragment;
-            string fsGizmoReveal = ShaderSource.GizmoRevealFragment;
-            _shaderProgramGizmoAccum = new ShaderProgram(_gl, "GizmoAccum", vsGizmoSolid, fsGizmoAccum, _viewport.OnLog);
-            _shaderProgramGizmoReveal = new ShaderProgram(_gl, "GizmoReveal", vsGizmoSolid, fsGizmoReveal, _viewport.OnLog);
-
             string vsFlatColor = ShaderSource.FlatColorVertex;
             string fsFlatColor = ShaderSource.FlatColorFragment;
             _shaderProgramFlatColor = new ShaderProgram(_gl, "FlatColor", vsFlatColor, fsFlatColor, _viewport.OnLog);
-
-            string fsFlatAccum = ShaderSource.FlatOitAccumFragment;
-            string fsFlatReveal = ShaderSource.FlatOitRevealFragment;
-            _shaderProgramFlatAccum = new ShaderProgram(_gl, "FlatAccum", vsFlatColor, fsFlatAccum, _viewport.OnLog);
-            _shaderProgramFlatReveal = new ShaderProgram(_gl, "FlatReveal", vsFlatColor, fsFlatReveal, _viewport.OnLog);
         }
 
         private unsafe void SetUniforms(ShaderProgram program, Matrix4X4<float> view, Matrix4X4<float> proj)
@@ -268,35 +234,6 @@ namespace MeshTool.UI.Rendering
             _axesBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
             _axesBuffer.SetAttribute(1, 3, VertexAttribPointerType.Float, 3 * sizeof(float));
 
-            // Solid gizmo handles VAO (dynamic triangle list)
-            _scanHandleBuffer = new VertexArray(_gl, ScanHandleVertexStride, 4096);
-            _vaoScanHandles = _scanHandleBuffer.VaoHandle;
-            _vboScanHandles = _scanHandleBuffer.VboHandle;
-            _scanHandleBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
-            _scanHandleBuffer.SetAttribute(1, 3, VertexAttribPointerType.Float, 3 * sizeof(float));
-            _scanHandleBuffer.SetAttribute(2, 3, VertexAttribPointerType.Float, 6 * sizeof(float));
-            _scanHandleBuffer.SetAttribute(3, 1, VertexAttribPointerType.Float, 9 * sizeof(float));
-
-            // Scan density preview VAO (dynamic points)
-            _scanDensityBuffer = new VertexArray(_gl, ScanLineVertexStride, 400000);
-            _vaoScanDensity = _scanDensityBuffer.VaoHandle;
-            _vboScanDensity = _scanDensityBuffer.VboHandle;
-            _scanDensityBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
-            _scanDensityBuffer.SetAttribute(1, 3, VertexAttribPointerType.Float, 3 * sizeof(float));
-
-            // Scan volume gizmo VAO (dynamic line list)
-            _scanVolumeBuffer = new VertexArray(_gl, ScanLineVertexStride, 256);
-            _vaoScanVolume = _scanVolumeBuffer.VaoHandle;
-            _vboScanVolume = _scanVolumeBuffer.VboHandle;
-            _scanVolumeBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
-            _scanVolumeBuffer.SetAttribute(1, 3, VertexAttribPointerType.Float, 3 * sizeof(float));
-
-            // Selection fill VAO (dynamic planar quad triangles)
-            _selectionFillBuffer = new VertexArray(_gl, SelectionFillVertexStride, 6);
-            _vaoSelectionFill = _selectionFillBuffer.VaoHandle;
-            _vboSelectionFill = _selectionFillBuffer.VboHandle;
-            _selectionFillBuffer.SetAttribute(0, 3, VertexAttribPointerType.Float, 0);
-
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
             _gl.BindVertexArray(0);
 
@@ -325,30 +262,21 @@ namespace MeshTool.UI.Rendering
             _gridRenderer?.Dispose();
             _rayRenderer?.Dispose();
             _meshRenderer?.Dispose();
+            _volumeRenderer?.Dispose();
             _axesBuffer?.Dispose();
-            _scanVolumeBuffer?.Dispose();
-            _scanHandleBuffer?.Dispose();
-            _scanDensityBuffer?.Dispose();
-            _selectionFillBuffer?.Dispose();
             _pointInstanceBuffer?.Dispose();
 
             _gl.DeleteVertexArray(_vaoPoints);
             _gl.DeleteVertexArray(_vaoSurfels);
             _gl.DeleteVertexArray(_vaoRays);
-            _vaoAxes = _vaoScanVolume = _vaoScanHandles = _vaoScanDensity = _vaoSelectionFill = 0;
-            _vboAxes = _vboScanVolume = _vboScanHandles = _vboScanDensity = _vboSelectionFill = 0;
+            _vaoAxes = 0;
+            _vboAxes = 0;
             _vboInstances = 0;
             _gl.DeleteBuffer(_vboSurfelVerts);
             _shaderProgramPoints?.Dispose();
             _shaderProgramSurfels?.Dispose();
             _shaderProgramAxes?.Dispose();
-            _shaderProgramGizmoSolid?.Dispose();
-            _shaderProgramDensityPoints?.Dispose();
             _shaderProgramFlatColor?.Dispose();
-            _shaderProgramGizmoAccum?.Dispose();
-            _shaderProgramGizmoReveal?.Dispose();
-            _shaderProgramFlatAccum?.Dispose();
-            _shaderProgramFlatReveal?.Dispose();
             _gl.Dispose();
         }
 
@@ -975,82 +903,23 @@ namespace MeshTool.UI.Rendering
             {
                 if (ShowScanVolume)
                 {
-                    UpdateScanVolumeBuffer();
+                    _volumeRenderer!.UpdateScanVolumeBuffer(_scanVolume, _hoverScanHandle, _activeScanHandle, ShowScanHandles, _showSelectionBox, _selectionStartWorld, _selectionEndWorld, _selectionYBottom, _selectionYTop);
                     if (ShowScanHandles)
                     {
-                        UpdateScanHandleBuffer();
+                        _volumeRenderer.UpdateScanHandleBuffer(_scanVolume, _hoverScanHandle, _activeScanHandle);
                     }
                 }
                 if (ShowScanDensityPreview)
                 {
-                    UpdateScanDensityBuffer();
+                    _volumeRenderer!.UpdateScanDensityBuffer(_scanVolume, GridPlaneY, ScanFineTargetStep, ref _fineDensityPreviewRadius);
                 }
-                if (_showSelectionBox || _selectionAreas.Length > 0 || _selectionFillVertexCount > 0)
+                if (_showSelectionBox || _selectionAreas.Length > 0 || _volumeRenderer!.SelectionFillVertexCount > 0)
                 {
-                    UpdateSelectionFillBuffer();
+                    _volumeRenderer!.UpdateSelectionFillBuffer(_showSelectionBox, _selectionAreas, _selectionAreasPlaneY, _selectionStartWorld, _selectionEndWorld);
                 }
-                if (_scanDensityVertexCount > 0 || (ShowScanVolume && _scanVolumeVertexCount > 0) || _selectionFillVertexCount > 0)
+                if (_volumeRenderer.ScanDensityVertexCount > 0 || (ShowScanVolume && _volumeRenderer.ScanVolumeVertexCount > 0) || _volumeRenderer.SelectionFillVertexCount > 0)
                 {
-                    if (ShowScanDensityPreview && _scanDensityVertexCount > 0)
-                    {
-                        _gl.Enable(EnableCap.DepthTest);
-                        _gl.DepthFunc(DepthFunction.Greater);
-                        _gl.DepthMask(false);
-                        _gl.Enable(EnableCap.Blend);
-                        _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-                        _gl.UseProgram(_shaderProgramDensityPoints!.Handle);
-                        SetUniforms(_shaderProgramDensityPoints, view, proj);
-                        _gl.BindVertexArray(_vaoScanDensity);
-                        var camPosPreview = _viewport.Camera.Position;
-                        int camLoc = _shaderProgramDensityPoints.GetUniformLocation("uCameraXZ");
-                        int radiusLoc = _shaderProgramDensityPoints.GetUniformLocation("uFadeRadius");
-                        int bandLoc = _shaderProgramDensityPoints.GetUniformLocation("uFadeBand");
-                        int fadeEnableLoc = _shaderProgramDensityPoints.GetUniformLocation("uEnableFade");
-                        _gl.Uniform2(camLoc, camPosPreview.X, camPosPreview.Z);
-                        float fadeBand = Math.Clamp(_fineDensityPreviewRadius * 0.22f, 260f, 1100f);
-                        _gl.Uniform1(radiusLoc, _fineDensityPreviewRadius);
-                        _gl.Uniform1(bandLoc, fadeBand);
-                        int psLoc = _shaderProgramDensityPoints.GetUniformLocation("uPointSize");
-                        if (_scanDensityBroadCount > 0)
-                        {
-                            _gl.Uniform1(fadeEnableLoc, 0.0f);
-                            _gl.Uniform1(psLoc, 3.5f);
-                            _gl.DrawArrays(PrimitiveType.Points, 0, (uint)_scanDensityBroadCount);
-                        }
-                        int fineCount = _scanDensityVertexCount - _scanDensityBroadCount;
-                        if (fineCount > 0)
-                        {
-                            _gl.Uniform1(fadeEnableLoc, 1.0f);
-                            _gl.Uniform1(psLoc, 2.0f);
-                            _gl.DrawArrays(PrimitiveType.Points, _scanDensityBroadCount, (uint)fineCount);
-                        }
-                        _gl.Disable(EnableCap.Blend);
-                        _gl.DepthMask(true);
-                    }
-
-                    _gl.Enable(EnableCap.DepthTest);
-                    _gl.DepthFunc(DepthFunction.Greater);
-
-                    if (ShowScanVolume && ShowScanHandles && _scanHandleVertexCount > 0)
-                    {
-                        _gl.DepthMask(true);
-                        _gl.Disable(EnableCap.Blend);
-                        _gl.Disable(EnableCap.CullFace);
-                        _gl.UseProgram(_shaderProgramGizmoSolid!.Handle);
-                        SetUniforms(_shaderProgramGizmoSolid, view, proj);
-                        _gl.BindVertexArray(_vaoScanHandles);
-                        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_scanHandleVertexCount);
-                    }
-
-                    if (ShowScanVolume && _scanVolumeVertexCount > 0)
-                    {
-                        _gl.DepthMask(false);
-                        _gl.UseProgram(_shaderProgramAxes!.Handle);
-                        SetUniforms(_shaderProgramAxes, view, proj);
-                        _gl.BindVertexArray(_vaoScanVolume);
-                        _gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_scanVolumeVertexCount);
-                        _gl.DepthMask(true);
-                    }
+                    _volumeRenderer.RenderOpaque(view, proj, ShowScanDensityPreview, ShowScanVolume, ShowScanHandles, _fineDensityPreviewRadius);
                 }
             }
 
@@ -1059,8 +928,8 @@ namespace MeshTool.UI.Rendering
             bool hasMissRays = _viewport.ShowMissRays && _missRayCount > 0;
             bool hasNormalRays = _viewport.ShowNormalRays && _pointCount > 0;
             bool hasRays = hasMissRays || hasNormalRays;
-            bool hasSelectionFill = _selectionFillVertexCount > 0;
-            bool hasScanHandlePlanes = ShowScanVolume && ShowScanHandles && _scanHandleVertexCount > 0;
+            bool hasSelectionFill = _volumeRenderer!.SelectionFillVertexCount > 0;
+            bool hasScanHandlePlanes = ShowScanVolume && ShowScanHandles && _volumeRenderer.ScanHandleVertexCount > 0;
             bool hasWboit = hasRays || _viewport.ShowGrid || hasSelectionFill || hasScanHandlePlanes;
 
             if (hasWboit)
@@ -1087,25 +956,7 @@ namespace MeshTool.UI.Rendering
                     _rayRenderer!.RenderAccum(view, proj, camPos, currentTime, _vaoRays, _missRayCount, _pointCount, hasMissRays, hasNormalRays);
                 }
 
-                if (hasSelectionFill)
-                {
-                    _gl.UseProgram(_shaderProgramFlatAccum!.Handle);
-                    SetUniforms(_shaderProgramFlatAccum, view, proj);
-                    int colorLocAccum = _shaderProgramFlatAccum.GetUniformLocation("uColor");
-                    _gl.Uniform4(colorLocAccum, 0.88f, 0.42f, 1.0f, 0.22f);
-                    _gl.Disable(EnableCap.CullFace);
-                    _gl.BindVertexArray(_vaoSelectionFill);
-                    _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_selectionFillVertexCount);
-                }
-
-                if (hasScanHandlePlanes)
-                {
-                    _gl.UseProgram(_shaderProgramGizmoAccum!.Handle);
-                    SetUniforms(_shaderProgramGizmoAccum, view, proj);
-                    _gl.Disable(EnableCap.CullFace);
-                    _gl.BindVertexArray(_vaoScanHandles);
-                    _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_scanHandleVertexCount);
-                }
+                _volumeRenderer.RenderAccum(view, proj, hasSelectionFill, hasScanHandlePlanes);
 
                 // OIT pass B (revealage) in dedicated MSAA FBO
                 _framebufferManager.BindMsaaRevealFramebuffer();
@@ -1123,25 +974,7 @@ namespace MeshTool.UI.Rendering
                     _rayRenderer!.RenderReveal(view, proj, camPos, currentTime, _vaoRays, _missRayCount, _pointCount, hasMissRays, hasNormalRays);
                 }
 
-                if (hasSelectionFill)
-                {
-                    _gl.UseProgram(_shaderProgramFlatReveal!.Handle);
-                    SetUniforms(_shaderProgramFlatReveal, view, proj);
-                    int colorLocReveal = _shaderProgramFlatReveal.GetUniformLocation("uColor");
-                    _gl.Uniform4(colorLocReveal, 0.88f, 0.42f, 1.0f, 0.22f);
-                    _gl.Disable(EnableCap.CullFace);
-                    _gl.BindVertexArray(_vaoSelectionFill);
-                    _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_selectionFillVertexCount);
-                }
-
-                if (hasScanHandlePlanes)
-                {
-                    _gl.UseProgram(_shaderProgramGizmoReveal!.Handle);
-                    SetUniforms(_shaderProgramGizmoReveal, view, proj);
-                    _gl.Disable(EnableCap.CullFace);
-                    _gl.BindVertexArray(_vaoScanHandles);
-                    _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_scanHandleVertexCount);
-                }
+                _volumeRenderer.RenderReveal(view, proj, hasSelectionFill, hasScanHandlePlanes);
 
                 _gl.Disable(EnableCap.Blend);
                 _gl.DepthMask(true);
@@ -1174,131 +1007,6 @@ namespace MeshTool.UI.Rendering
                 // Blit Resolve FBO to Default FBO.
                 _framebufferManager.BlitToFramebuffer((uint)fb);
             }
-        }
-
-        private unsafe void UpdateScanVolumeBuffer()
-        {
-            var s = _scanVolume.Sanitize();
-            float[] data = ScanVolumeGeometryBuilder.BuildScanVolumeLineVertices(
-                s,
-                _hoverScanHandle,
-                _activeScanHandle,
-                ShowScanHandles,
-                _showSelectionBox,
-                _selectionStartWorld,
-                _selectionEndWorld,
-                _selectionYBottom,
-                _selectionYTop);
-            _scanVolumeVertexCount = data.Length / 6;
-            _scanVolumeBuffer!.UploadData(data, _scanVolumeVertexCount, BufferUsageARB.DynamicDraw);
-        }
-
-        private unsafe void UpdateSelectionFillBuffer()
-        {
-            _selectionFillVertexCount = 0;
-            if (!_showSelectionBox && _selectionAreas.Length == 0)
-            {
-                return;
-            }
-
-            var verts = new System.Collections.Generic.List<float>((_selectionAreas.Length + (_showSelectionBox ? 1 : 0)) * 18);
-            float y = _selectionAreasPlaneY + 0.05f;
-
-            void AddArea(float minX, float maxX, float minZ, float maxZ)
-            {
-                if ((maxX - minX) < 0.001f || (maxZ - minZ) < 0.001f)
-                {
-                    return;
-                }
-
-                verts.Add(minX); verts.Add(y); verts.Add(minZ);
-                verts.Add(maxX); verts.Add(y); verts.Add(minZ);
-                verts.Add(maxX); verts.Add(y); verts.Add(maxZ);
-                verts.Add(minX); verts.Add(y); verts.Add(minZ);
-                verts.Add(maxX); verts.Add(y); verts.Add(maxZ);
-                verts.Add(minX); verts.Add(y); verts.Add(maxZ);
-            }
-
-            for (int i = 0; i < _selectionAreas.Length; i++)
-            {
-                var a = _selectionAreas[i];
-                AddArea(a.X, a.Y, a.Z, a.W);
-            }
-
-            if (_showSelectionBox)
-            {
-                float minX = MathF.Min(_selectionStartWorld.X, _selectionEndWorld.X);
-                float maxX = MathF.Max(_selectionStartWorld.X, _selectionEndWorld.X);
-                float minZ = MathF.Min(_selectionStartWorld.Z, _selectionEndWorld.Z);
-                float maxZ = MathF.Max(_selectionStartWorld.Z, _selectionEndWorld.Z);
-                AddArea(minX, maxX, minZ, maxZ);
-            }
-
-            if (verts.Count == 0)
-            {
-                return;
-            }
-
-            _selectionFillVertexCount = verts.Count / 3;
-            var data = verts.ToArray();
-            _selectionFillBuffer!.UploadData(data, _selectionFillVertexCount, BufferUsageARB.DynamicDraw);
-        }
-
-        private unsafe void UpdateScanHandleBuffer()
-        {
-            var s = _scanVolume.Sanitize();
-            float[] data = ScanVolumeGeometryBuilder.BuildScanHandleSolidVertices(s, _hoverScanHandle, _activeScanHandle, _viewport.Camera.Position);
-            _scanHandleVertexCount = data.Length / 10;
-            _scanHandleBuffer!.UploadData(data, _scanHandleVertexCount, BufferUsageARB.DynamicDraw);
-        }
-
-        private unsafe void UpdateScanDensityBuffer()
-        {
-            var s = _scanVolume.Sanitize();
-            if (!ShouldRebuildScanDensity(s))
-            {
-                return;
-            }
-
-            var density = ScanVolumeGeometryBuilder.BuildScanDensityVertices(s, GridPlaneY, ScanFineTargetStep, _viewport.Camera.Position, ref _fineDensityPreviewRadius);
-            float[] data = density.Vertices;
-            _scanDensityVertexCount = data.Length / 6;
-            _scanDensityBroadCount = density.BroadCount;
-            _scanDensityBuffer!.UploadData(data, _scanDensityVertexCount, BufferUsageARB.DynamicDraw);
-
-            _scanDensityBufferValid = true;
-            _lastDensityScanVolume = s;
-            _lastDensityFineTargetStep = ScanFineTargetStep;
-            _lastDensityGridPlaneY = GridPlaneY;
-            _lastDensityCameraPos = _viewport.Camera.Position;
-        }
-
-        private bool ShouldRebuildScanDensity(ScanVolumeSettings s)
-        {
-            if (!_scanDensityBufferValid)
-            {
-                return true;
-            }
-
-            if (!_lastDensityScanVolume.Equals(s))
-            {
-                return true;
-            }
-
-            if (MathF.Abs(_lastDensityFineTargetStep - ScanFineTargetStep) > 0.01f)
-            {
-                return true;
-            }
-
-            if (MathF.Abs(_lastDensityGridPlaneY - GridPlaneY) > 0.01f)
-            {
-                return true;
-            }
-
-            var cam = _viewport.Camera.Position;
-            float dx = cam.X - _lastDensityCameraPos.X;
-            float dz = cam.Z - _lastDensityCameraPos.Z;
-            return (dx * dx) + (dz * dz) >= (ScanDensityRebuildMoveThreshold * ScanDensityRebuildMoveThreshold);
         }
 
     }
