@@ -44,7 +44,8 @@ public sealed class ScanScriptExportController
             ["Y_BOTTOM"] = s.YBottom.ToString("0.###", CultureInfo.InvariantCulture),
             ["INITIAL_PROBE_CELL_SIZE"] = s.ProbeCellSize.ToString("0.###", CultureInfo.InvariantCulture),
             ["INITIAL_PROBE_RADIUS"] = maxHalf.ToString("0.###", CultureInfo.InvariantCulture),
-            ["TARGET_STEP"] = MathF.Round(fineTargetStep).ToString("0", CultureInfo.InvariantCulture)
+            ["TARGET_STEP"] = MathF.Round(fineTargetStep).ToString("0", CultureInfo.InvariantCulture),
+            ["BOT_COUNT"] = "5"
         };
 
         foreach (var kv in tokens)
