@@ -27,6 +27,7 @@ namespace MeshTool.UI.Controllers
         private readonly Slider _sldFineDensity;
         private readonly TextBlock _txtBroadMeters;
         private readonly TextBlock _txtFineMeters;
+        private readonly ScanVolumePanel _panel;
 
         private bool _isSyncing;
         private float _finePhaseTargetStep = ScanDensity.DefaultFineStep;
@@ -56,6 +57,7 @@ namespace MeshTool.UI.Controllers
         /// </summary>
         public ScanVolumeController(ScanVolumePanel panel)
         {
+            _panel = panel;
             _txtCenterX = panel.ScanCenterXTextBox;
             _txtCenterZ = panel.ScanCenterZTextBox;
             _txtSizeX = panel.ScanSizeXTextBox;
@@ -135,6 +137,8 @@ namespace MeshTool.UI.Controllers
                 _txtYBottom.Text = settings.YBottom.ToString("F1", CultureInfo.InvariantCulture);
                 _txtYaw.Text = settings.YawDegrees.ToString("F1", CultureInfo.InvariantCulture);
                 _txtRayTilt.Text = settings.RayTiltDegrees.ToString("F1", CultureInfo.InvariantCulture);
+                var txtBots = _panel.FindControl<TextBox>("TxtBotCount");
+                if (txtBots != null) txtBots.Text = settings.BotCount.ToString("F0", CultureInfo.InvariantCulture);
                 _sldDensity.Value = CellToDensity(settings.ProbeCellSize);
                 _sldFineDensity.Value = FineStepToDensity(_finePhaseTargetStep);
                 UpdateMetersLabels(settings.ProbeCellSize, _finePhaseTargetStep);
@@ -166,7 +170,8 @@ namespace MeshTool.UI.Controllers
             }
 
             float probeCellSize = DensityToCell(_sldDensity.Value);
-            settings = new ScanVolumeSettings(cx, cz, sx, sz, yTop, yBottom, yaw, tilt, probeCellSize).Sanitize();
+            int botCount = _panel.BotCount;
+            settings = new ScanVolumeSettings(cx, cz, sx, sz, yTop, yBottom, yaw, tilt, probeCellSize, botCount).Sanitize();
             return true;
         }
 

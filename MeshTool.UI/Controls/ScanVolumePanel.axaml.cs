@@ -28,6 +28,15 @@ public partial class ScanVolumePanel : UserControl
     public TextBox ScanYBottomTextBox => this.FindControl<TextBox>("TxtScanYBottom")!;
     public TextBox ScanYawTextBox => this.FindControl<TextBox>("TxtScanYaw")!;
     public TextBox ScanRayTiltTextBox => this.FindControl<TextBox>("TxtScanRayTilt")!;
+    public int BotCount
+    {
+        get
+        {
+            if (int.TryParse(this.FindControl<TextBox>("TxtBotCount")?.Text, out var val))
+                return Math.Clamp(val, 1, 20);
+            return 5;
+        }
+    }
     public Slider ScanDensitySlider => this.FindControl<Slider>("SldScanDensity")!;
     public Slider FineDensitySlider => this.FindControl<Slider>("SldFineDensity")!;
     public TextBlock BroadDensityTextBlock => this.FindControl<TextBlock>("TxtBroadDensityMeters")!;
@@ -77,5 +86,6 @@ public partial class ScanVolumePanel : UserControl
         ScanDensitySlider.IsEnabled = enabled;
         FineDensitySlider.IsEnabled = enabled;
         ResetScanVolumeButton.IsEnabled = enabled;
+        this.FindControl<TextBox>("TxtBotCount")!.IsEnabled = enabled;
     }
 }

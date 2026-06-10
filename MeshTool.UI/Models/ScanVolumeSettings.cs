@@ -11,7 +11,8 @@ namespace MeshTool.UI.Models
         float YBottom,
         float YawDegrees,
         float RayTiltDegrees,
-        float ProbeCellSize)
+        float ProbeCellSize,
+        int BotCount)
     {
         public static ScanVolumeSettings Default => new ScanVolumeSettings(
             CenterX: 0f,
@@ -22,7 +23,8 @@ namespace MeshTool.UI.Models
             YBottom: -400f,
             YawDegrees: 0f,
             RayTiltDegrees: 0f,
-            ProbeCellSize: 384f);
+            ProbeCellSize: 384f,
+            BotCount: 5);
 
         public ScanVolumeSettings Sanitize()
         {
@@ -37,6 +39,7 @@ namespace MeshTool.UI.Models
 
             float cell = MathF.Max(8f, ProbeCellSize);
             float tilt = Math.Clamp(RayTiltDegrees, -89f, 89f);
+            int bots = Math.Clamp(BotCount, 1, 20);
 
             return this with
             {
@@ -45,7 +48,8 @@ namespace MeshTool.UI.Models
                 YTop = top,
                 YBottom = bottom,
                 RayTiltDegrees = tilt,
-                ProbeCellSize = cell
+                ProbeCellSize = cell,
+                BotCount = bots
             };
         }
     }

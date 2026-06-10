@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Threading.Tasks;
 using Avalonia.Controls;
-using Avalonia.Platform;
 using MeshTool.UI.Models;
 
 namespace MeshTool.UI.Controllers;
@@ -45,7 +45,7 @@ public sealed class ScanScriptExportController
             ["INITIAL_PROBE_CELL_SIZE"] = s.ProbeCellSize.ToString("0.###", CultureInfo.InvariantCulture),
             ["INITIAL_PROBE_RADIUS"] = maxHalf.ToString("0.###", CultureInfo.InvariantCulture),
             ["TARGET_STEP"] = MathF.Round(fineTargetStep).ToString("0", CultureInfo.InvariantCulture),
-            ["BOT_COUNT"] = "5"
+            ["BOT_COUNT"] = s.BotCount.ToString(CultureInfo.InvariantCulture)
         };
 
         foreach (var kv in tokens)
@@ -63,13 +63,10 @@ public sealed class ScanScriptExportController
 
     private static string LoadEmbeddedScanTemplate()
     {
-        var uri = new Uri("avares://MeshTool.UI/scan.ts.template");
-        if (!AssetLoader.Exists(uri))
-        {
-            throw new InvalidOperationException("Embedded resource 'scan.ts.template' not found.");
-        }
-
-        using var stream = AssetLoader.Open(uri);
+        var asm = Assembly.GetExecutingAssembly();
+        const string resourceName = "MeshTool.UI.scan.ts.template";
+        using var stream = asm.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Embedded resource '{resourceName}' not found.");
         using var reader = new StreamReader(stream);
         return reader.ReadToEnd();
     }

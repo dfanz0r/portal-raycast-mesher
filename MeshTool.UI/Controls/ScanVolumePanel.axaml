@@ -38,6 +38,13 @@
             </Grid>
         </StackPanel>
 
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="6">
+            <TextBlock Grid.Column="0" Text="Bots" Foreground="LightGray" VerticalAlignment="Center"/>
+            <TextBox x:Name="TxtBotCount" Grid.Column="1" Width="50" Text="5" TextAlignment="Center"/>
+            <TextBlock Grid.Column="2" Text="(1-20)" Foreground="Gray" VerticalAlignment="Center" FontSize="11"/>
+            <Button x:Name="BtnResetScanVolume" Grid.Column="3" Content="Reset Volume" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
+        </Grid>
+
         <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="3">
             <TextBlock Grid.Row="0" Grid.Column="0" Text="Broad Phase Density" Foreground="LightGray" VerticalAlignment="Center"/>
             <Slider Grid.Row="0" Grid.Column="1" x:Name="SldScanDensity" Margin="0,-8,0,0" VerticalAlignment="Center" Minimum="0" Maximum="1" Value="0.5" ToolTip.Tip="Higher = denser broad phase seeds (smaller probe cell)"/>
@@ -47,9 +54,6 @@
             <TextBlock Grid.Row="1" Grid.Column="2" x:Name="TxtFineDensityMeters" Text="--- m" Foreground="#93C5FD" VerticalAlignment="Center" FontFamily="Consolas"/>
         </Grid>
 
-        <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
-            <Button x:Name="BtnResetScanVolume" Grid.Column="0" Content="Reset Volume" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"/>
-            <Button x:Name="BtnExportScanTs" Grid.Column="1" Content="Copy Script" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Copy the portal raycast script based on the current view bounding volume"/>
-        </Grid>
+        <Button x:Name="BtnExportScanTs" Content="Copy Script" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" ToolTip.Tip="Copy the portal raycast script based on the current view bounding volume"/>
     </StackPanel>
 </UserControl>

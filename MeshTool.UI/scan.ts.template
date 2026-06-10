@@ -119,26 +119,40 @@ async function waitTicks(n: number): Promise<void> {
 
 // Spawn bots and wait for them to deploy
 async function spawnBots(): Promise<void> {
-    const pos = mod.GetObjectPosition(mod.GetHQ(BOT_TEAM));
+    const hq = mod.GetHQ(BOT_TEAM);
+    console.log(`HQ object: ${hq ? "valid" : "NULL"}`);
+    if (!hq) {
+        console.log("ERROR: HQ not found — bots cannot spawn");
+        return;
+    }
+    const pos = mod.GetObjectPosition(hq);
+    console.log(`HQ position: (${mod.XComponentOf(pos)}, ${mod.YComponentOf(pos)}, ${mod.ZComponentOf(pos)})`);
 
     console.log(`Creating AI_Spawner at HQ (team ${BOT_TEAM})...`);
     const sp = mod.SpawnObject(
         mod.RuntimeSpawn_Common.AI_Spawner, pos, v(0, 0, 0), v(1, 1, 1)
-    ) as unknown as mod.Spawner;
+    ) as mod.Spawner;
+    console.log(`Spawner object: ${sp ? "valid" : "NULL"}`);
     await waitTicks(5);
 
     console.log(`Spawning ${BOT_COUNT} bots...`);
     for (let i = 0; i < BOT_COUNT; i++) {
         mod.SpawnAIFromAISpawner(sp, mod.Message(`R${i}`), mod.GetTeam(BOT_TEAM));
+        console.log(`  Spawned R${i}`);
         await waitTicks(1);
     }
 
     // Wait for all bots to deploy
-    for (let i = 0; i < 180 && bots.length < BOT_COUNT && aliveBotCount() < BOT_COUNT; i++) {
+    console.log(`Waiting for bots to deploy...`);
+    for (let i = 0; i < 180; i++) {
+        if (bots.length >= BOT_COUNT && aliveBotCount() >= BOT_COUNT) break;
         await waitTicks(1);
     }
 
-    console.log(`Bots ready: ${aliveBotCount()}/${BOT_COUNT}`);
+    console.log(`Bots seen: ${bots.length}, alive: ${aliveBotCount()}/${BOT_COUNT}`);
+    if (bots.length === 0) {
+        console.log("WARNING: No bots deployed — scan will have no workers");
+    }
 }
 
 // Find a bot's index in the bots array by player reference
@@ -232,9 +246,9 @@ function clamp(value: number, minValue: number, maxValue: number): number {
 
 export function OnGameModeStarted(): void {
     beginScan = true;
+    mod.PauseGameModeTime(false);  // Ensure game is unpaused so bots can deploy
     CheckAndLogCurrentMap();
     console.log("Spawning bots...");
-    mod.PauseGameModeTime(true);
     void run();
 }
 
@@ -267,6 +281,9 @@ async function buildQuadGrid(): Promise<void> {
 
 async function run(): Promise<void> {
     await spawnBots();
+    // Now pause game time so the scan processes one ray per tick
+    // without the game world advancing under us.
+    mod.PauseGameModeTime(true);
     await buildQuadGrid();
 }
 
@@ -435,9 +452,10 @@ export function OnPlayerDeployed(p: mod.Player) {
         if (!seenIds.has(id)) {
             seenIds.add(id);
             bots.push(p);
+            console.log(`Bot deployed: ${bots.length}/${BOT_COUNT}`);
         }
-        mod.SetPlayerMaxHealth(p, 9999);
-        mod.Heal(p, 9999);
+        mod.SetPlayerMaxHealth(p, 500);
+        mod.Heal(p, 500);
         mod.AIIdleBehavior(p);
     }
 }

@@ -29,6 +29,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <AvaloniaResource Include="scan.ts.template" />
+    <EmbeddedResource Include="scan.ts.template" />
   </ItemGroup>
 </Project>
