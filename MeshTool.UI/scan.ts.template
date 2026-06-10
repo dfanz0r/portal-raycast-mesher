@@ -69,11 +69,12 @@ class RayParams {
     constructor(
         public sx: number, public sy: number, public sz: number,
         public ex: number, public ey: number, public ez: number,
-        public phase: Phase,
-        public botIndex: number
+        public phase: Phase
     ) {}
 }
-const queue: RayParams[] = [];
+// Per-bot ray queue — each bot gets its own queue so results are
+always attributable by botIndex without ordering assumptions.
+const queues: RayParams[][] = [];
 
 let done = false;
 let beginScan = false;
@@ -273,6 +274,8 @@ async function buildQuadGrid(): Promise<void> {
     // Initialise per-bot pending arrays
     pendingQuadNodes = new Array<QuadNode | null>(bots.length).fill(null);
     pendingScanCells = new Array<ScanCell | null>(bots.length).fill(null);
+    // Initialise per-bot ray queues
+    for (let i = 0; i < bots.length; i++) queues[i] = [];
 
     console.log(`Quad seeds: ${quadQueue.length} (${INITIAL_PROBE_CELL_SIZE}x${INITIAL_PROBE_CELL_SIZE})`);
     console.log(`Bots available: ${aliveBotCount()} — starting QuadTree scan...`);
@@ -281,6 +284,13 @@ async function buildQuadGrid(): Promise<void> {
 
 async function run(): Promise<void> {
     await spawnBots();
+
+    if (aliveBotCount() === 0) {
+        console.log("ERROR: No alive bots — aborting scan");
+        done = true;
+        return;
+    }
+
     // Now pause game time so the scan processes one ray per tick
     // without the game world advancing under us.
     mod.PauseGameModeTime(true);
@@ -338,7 +348,12 @@ function fireRay(bot: mod.Player, botIndex: number, x: number, z: number, phase:
 
     const effectiveTiltDeg = phase === Phase.QuadTreeSearch ? 0 : ScanTiltDeg;
     const absYSpan = Math.abs(ybot - ytop);
-    const desiredOffsetMag = Math.tan(Math.abs(effectiveTiltDeg) * Math.PI / 180.0) * absYSpan;
+    let desiredOffsetMag = Math.tan(Math.abs(effectiveTiltDeg) * Math.PI / 180.0) * absYSpan;
+
+    // Cap the actual horizontal offset by the computed tilt from coverage logic
+    if (phase === Phase.AdaptiveScan && tilt > 0) {
+        desiredOffsetMag = Math.min(desiredOffsetMag, tilt);
+    }
 
     let dirLocalX = 0;
     let dirLocalZ = 0;
@@ -369,8 +384,8 @@ function fireRay(bot: mod.Player, botIndex: number, x: number, z: number, phase:
     const ex = jx + ((1 - t) * dWorldX);
     const ez = jz + ((1 - t) * dWorldZ);
 
-    const p = new RayParams(sx, ytop, sz, ex, ybot, ez, phase, botIndex);
-    queue.push(p);
+    const p = new RayParams(sx, ytop, sz, ex, ybot, ez, phase);
+    queues[botIndex].push(p);
     mod.RayCast(bot, v(p.sx, p.sy, p.sz), v(p.ex, p.ey, p.ez));
 }
 
@@ -380,11 +395,16 @@ function startAdaptiveScan(): void {
 }
 
 function tickBot(bot: mod.Player, botIndex: number): void {
+    // One bot === at most one active ray.
+    // If this bot still has a queued result pending, do NOT refire.
+    if (queues[botIndex].length > 0) return;
+
     switch (phase) {
         case Phase.QuadTreeSearch: {
             const pending = pendingQuadNodes[botIndex];
             if (pending) {
-                // Retry the existing pending node (re-fires its probe)
+                // Stale node from prior missed probe — retry it.
+                // This is safe because no other ray for this bot is in-flight.
                 fireQuadProbe(bot, botIndex, pending);
             } else if (quadQueue.length > 0) {
                 const node = quadQueue.pop()!;
@@ -395,11 +415,6 @@ function tickBot(bot: mod.Player, botIndex: number): void {
         }
 
         case Phase.AdaptiveScan: {
-            const pending = pendingScanCells[botIndex];
-            if (pending) {
-                // This shouldn't happen (cleared on hit/miss), but guard anyway
-                return;
-            }
             if (scanStack.length > 0) {
                 const cell = scanStack.pop()!;
                 pendingScanCells[botIndex] = cell;
@@ -467,20 +482,14 @@ export function OnPlayerDeployed(p: mod.Player) {
 // ── Raycast result handlers ────────────────────────────────
 
 export function OnRayCastHit(eventPlayer: mod.Player, eventPoint: mod.Vector, eventNormal: mod.Vector): void {
-    // Find the RayParams for this bot's in-flight ray by scanning the queue
-    // (In practice the queue order matches the fire order, so the first entry
-    //  for this bot is the one we want.)
     const bi = botIndexByPlayer(eventPlayer);
     if (bi < 0) return;
 
-    let p: RayParams | null = null;
-    for (let i = 0; i < queue.length; i++) {
-        if (queue[i].botIndex === bi) {
-            p = queue.splice(i, 1)[0];
-            break;
-        }
-    }
+    const p = queues[bi].shift();
     if (!p) return;
+
+    // Discard stale results from a prior phase
+    if (p.phase !== phase) return;
 
     const px = mod.XComponentOf(eventPoint);
     const py = mod.YComponentOf(eventPoint);
@@ -536,14 +545,11 @@ export function OnRayCastMissed(eventPlayer: mod.Player): void {
     const bi = botIndexByPlayer(eventPlayer);
     if (bi < 0) return;
 
-    let p: RayParams | null = null;
-    for (let i = 0; i < queue.length; i++) {
-        if (queue[i].botIndex === bi) {
-            p = queue.splice(i, 1)[0];
-            break;
-        }
-    }
+    const p = queues[bi].shift();
     if (!p) return;
+
+    // Discard stale results from a prior phase
+    if (p.phase !== phase) return;
 
     console.log(`MISS|S:${p.sx},${p.sy},${p.sz}|E:${p.ex},${p.ey},${p.ez}`);
 

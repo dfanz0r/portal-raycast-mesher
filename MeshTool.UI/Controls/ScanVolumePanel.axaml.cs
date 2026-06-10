@@ -33,7 +33,7 @@ public partial class ScanVolumePanel : UserControl
         get
         {
             if (int.TryParse(this.FindControl<TextBox>("TxtBotCount")?.Text, out var val))
-                return Math.Clamp(val, 1, 20);
+                return Math.Clamp(val, 1, 70);
             return 5;
         }
     }

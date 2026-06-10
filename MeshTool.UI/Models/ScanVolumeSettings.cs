@@ -39,7 +39,7 @@ namespace MeshTool.UI.Models
 
             float cell = MathF.Max(8f, ProbeCellSize);
             float tilt = Math.Clamp(RayTiltDegrees, -89f, 89f);
-            int bots = Math.Clamp(BotCount, 1, 20);
+            int bots = Math.Clamp(BotCount, 1, 70);
 
             return this with
             {
