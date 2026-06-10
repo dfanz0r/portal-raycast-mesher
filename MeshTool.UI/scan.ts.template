@@ -414,32 +414,36 @@ export function OngoingGlobal(): void {
     if (!beginScan || done) return;
     if (!scanStarted) return;
 
-    // If all bots are idle and all work pools are empty, advance phases or finish
-    if (quadQueue.length === 0 && scanStack.length === 0) {
-        // Check if any bot still has pending work
+    // ── Phase transitions ──
+    // QuadTreeSearch → AdaptiveScan: when quad work pool is empty and no in-flight probes
+    if (phase === Phase.QuadTreeSearch && quadQueue.length === 0) {
         let anyPending = false;
         for (let i = 0; i < bots.length; i++) {
-            if (pendingQuadNodes[i] || pendingScanCells[i]) { anyPending = true; break; }
+            if (pendingQuadNodes[i]) { anyPending = true; break; }
         }
         if (!anyPending) {
-            if (phase === Phase.QuadTreeSearch) {
-                startAdaptiveScan();
-            } else {
-                done = true;
-                mod.AddUIText("Complete", v(0,0,0), v(200,100,100), mod.UIAnchor.Center, mod.Message("Complete!"));
-                console.log("MAPPING COMPLETE");
-                mod.EndGameMode(mod.GetTeam(0));
-                return;
-            }
+            startAdaptiveScan();
+        }
+    }
+
+    // AdaptiveScan → Done: when adaptive work pool is empty and no in-flight rays
+    if (phase === Phase.AdaptiveScan && scanStack.length === 0) {
+        let anyPending = false;
+        for (let i = 0; i < bots.length; i++) {
+            if (pendingScanCells[i]) { anyPending = true; break; }
+        }
+        if (!anyPending) {
+            done = true;
+            mod.AddUIText("Complete", v(0,0,0), v(200,100,100), mod.UIAnchor.Center, mod.Message("Complete!"));
+            console.log("MAPPING COMPLETE");
+            mod.EndGameMode(mod.GetTeam(0));
+            return;
         }
     }
 
     // Fire one work item per alive bot
     for (let i = 0; i < bots.length; i++) {
         if (!isAlive(bots[i])) continue;
-
-        // If this bot already has a pending quad node and it hasn't exhausted probes, retry it
-        // Otherwise, pull new work
         tickBot(bots[i], i);
     }
 }
