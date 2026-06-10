@@ -20,7 +20,7 @@ const BOT_TEAM = 1;
 // ── Scan algorithm constants ───────────────────────────────
 const QUAD_MIN_SIZE = 192;
 const INITIAL_PROBE_CELL_SIZE = {{INITIAL_PROBE_CELL_SIZE}};
-const INITIAL_PROBE_RADIUS = {{INITIAL_PROBE_RADIUS}};
+
 const QUAD_PROBE_COVERAGE = 0.8;
 const QUAD_PROBE_OFFSETS: Array<[number, number]> = [
     [0, 0],
@@ -34,7 +34,7 @@ const QUAD_PROBE_OFFSETS: Array<[number, number]> = [
     [-1, 1]
 ];
 const TARGET_STEP = {{TARGET_STEP}};
-const INITIAL_STEP = 192;
+
 const TERRAIN_Y_EMA_ALPHA = 0.05;
 const JITTER_MIN = 2;
 const JITTER_MAX = 50;
@@ -72,8 +72,7 @@ class RayParams {
         public phase: Phase
     ) {}
 }
-// Per-bot ray queue — each bot gets its own queue so results are
-always attributable by botIndex without ordering assumptions.
+// Per-bot ray queue — each bot gets its own queue so results are always attributable by botIndex without ordering assumptions.
 const queues: RayParams[][] = [];
 
 let done = false;
@@ -102,9 +101,7 @@ function v(x: number, y: number, z: number): mod.Vector {
     return mod.CreateVector(x, y, z);
 }
 
-function add(a: mod.Vector, b: mod.Vector): mod.Vector {
-    return mod.Add(a, b);
-}
+
 
 function isAlive(p: mod.Player | null | undefined): p is mod.Player {
     return !!p && mod.IsPlayerValid(p) && mod.GetSoldierState(p, mod.SoldierStateBool.IsAlive);
@@ -228,7 +225,7 @@ function getQuadProbePoint(node: QuadNode): { x: number; z: number } {
 }
 
 function getQuadProbeLimit(node: QuadNode): number {
-    if (node.halfSize <= (INITIAL_PROBE_CELL_SIZE * 0.5)) return 1;
+    if (node.halfSize < QUAD_MIN_SIZE) return 1;
     return QUAD_PROBE_OFFSETS.length;
 }
 
@@ -241,9 +238,7 @@ function pushAdaptiveChildren(parentX: number, parentZ: number, parentStep: numb
     addChildrenFromHit(parentX, parentZ, parentStep, scanStack);
 }
 
-function clamp(value: number, minValue: number, maxValue: number): number {
-    return Math.max(minValue, Math.min(maxValue, value));
-}
+
 
 export function OnGameModeStarted(): void {
     beginScan = true;
@@ -278,6 +273,11 @@ async function buildQuadGrid(): Promise<void> {
     for (let i = 0; i < bots.length; i++) queues[i] = [];
 
     console.log(`Quad seeds: ${quadQueue.length} (${INITIAL_PROBE_CELL_SIZE}x${INITIAL_PROBE_CELL_SIZE})`);
+    console.log(
+      `Scan config: center=(${MapCenterX},${MapCenterZ}), half=(${MapHalfSizeX},${MapHalfSizeZ}), ` +
+      `yaw=${ScanYawDeg}, tilt=${ScanTiltDeg}, y=[${ytop},${ybot}], ` +
+      `initialCell=${INITIAL_PROBE_CELL_SIZE}, quadMin=${QUAD_MIN_SIZE}, target=${TARGET_STEP}`
+    );
     console.log(`Bots available: ${aliveBotCount()} — starting QuadTree scan...`);
     scanStarted = true;
 }
@@ -300,16 +300,16 @@ async function run(): Promise<void> {
 function fireRay(bot: mod.Player, botIndex: number, x: number, z: number, phase: Phase, step: number): void {
     const seq = raySequence++;
     let jitterBase = 50;
-    let tiltBase = 100;
+    let baseHorizontalOffset = 100;
 
     if (phase === Phase.QuadTreeSearch) {
-        tiltBase = 0;
+        baseHorizontalOffset = 0;
         jitterBase = step * 0.25;
     }
 
     if (phase === Phase.AdaptiveScan) {
         jitterBase = Math.max(JITTER_MIN, Math.min(JITTER_MAX, step * 0.35));
-        tiltBase = Math.max(4, Math.min(100, step * 0.5));
+        baseHorizontalOffset = Math.max(4, Math.min(100, step * 0.5));
     }
 
     const estimatedTerrainY = terrainYSampleCount > 0 ? avgTerrainY : (ytop + ybot) * 0.5;
@@ -320,14 +320,14 @@ function fireRay(bot: mod.Player, botIndex: number, x: number, z: number, phase:
     const segmentHalf = Math.max(step * 0.5, 1);
     const desiredHalfSpread = Math.max(JITTER_MIN * 0.5, step * COVERAGE_RATIO);
 
-    let tilt = tiltBase;
+    let maxHorizontalOffset = baseHorizontalOffset;
     if (phase === Phase.AdaptiveScan && hitFactor > 0) {
         const maxTiltFromSegment = segmentHalf / hitFactor;
-        tilt = Math.min(tiltBase, maxTiltFromSegment);
+        maxHorizontalOffset = Math.min(baseHorizontalOffset, maxTiltFromSegment);
     }
 
-    const jitterFromCoverage = 2 * Math.max(0, desiredHalfSpread - (hitFactor * tilt));
-    const jitterFromSegment = 2 * Math.max(0, segmentHalf - (hitFactor * tilt));
+    const jitterFromCoverage = 2 * Math.max(0, desiredHalfSpread - (hitFactor * maxHorizontalOffset));
+    const jitterFromSegment = 2 * Math.max(0, segmentHalf - (hitFactor * maxHorizontalOffset));
     const jitter = Math.max(0, Math.min(jitterBase, jitterFromCoverage, jitterFromSegment));
 
     const yawRad = ScanYawDeg * Math.PI / 180.0;
@@ -351,8 +351,8 @@ function fireRay(bot: mod.Player, botIndex: number, x: number, z: number, phase:
     let desiredOffsetMag = Math.tan(Math.abs(effectiveTiltDeg) * Math.PI / 180.0) * absYSpan;
 
     // Cap the actual horizontal offset by the computed tilt from coverage logic
-    if (phase === Phase.AdaptiveScan && tilt > 0) {
-        desiredOffsetMag = Math.min(desiredOffsetMag, tilt);
+    if (phase === Phase.AdaptiveScan && maxHorizontalOffset > 0) {
+        desiredOffsetMag = Math.min(desiredOffsetMag, maxHorizontalOffset);
     }
 
     let dirLocalX = 0;
@@ -403,8 +403,7 @@ function tickBot(bot: mod.Player, botIndex: number): void {
         case Phase.QuadTreeSearch: {
             const pending = pendingQuadNodes[botIndex];
             if (pending) {
-                // Stale node from prior missed probe — retry it.
-                // This is safe because no other ray for this bot is in-flight.
+                // Continue probing this node at its next probe offset.
                 fireQuadProbe(bot, botIndex, pending);
             } else if (quadQueue.length > 0) {
                 const node = quadQueue.pop()!;
@@ -415,6 +414,7 @@ function tickBot(bot: mod.Player, botIndex: number): void {
         }
 
         case Phase.AdaptiveScan: {
+            if (pendingScanCells[botIndex]) return;
             if (scanStack.length > 0) {
                 const cell = scanStack.pop()!;
                 pendingScanCells[botIndex] = cell;
@@ -434,7 +434,7 @@ export function OngoingGlobal(): void {
     if (phase === Phase.QuadTreeSearch && quadQueue.length === 0) {
         let anyPending = false;
         for (let i = 0; i < bots.length; i++) {
-            if (pendingQuadNodes[i]) { anyPending = true; break; }
+            if (pendingQuadNodes[i] || (queues[i]?.length ?? 0) > 0) { anyPending = true; break; }
         }
         if (!anyPending) {
             startAdaptiveScan();
@@ -445,9 +445,10 @@ export function OngoingGlobal(): void {
     if (phase === Phase.AdaptiveScan && scanStack.length === 0) {
         let anyPending = false;
         for (let i = 0; i < bots.length; i++) {
-            if (pendingScanCells[i]) { anyPending = true; break; }
+            if (pendingScanCells[i] || (queues[i]?.length ?? 0) > 0) { anyPending = true; break; }
         }
         if (!anyPending) {
+            phase = Phase.Done;
             done = true;
             mod.AddUIText("Complete", v(0,0,0), v(200,100,100), mod.UIAnchor.Center, mod.Message("Complete!"));
             console.log("MAPPING COMPLETE");
@@ -489,7 +490,15 @@ export function OnRayCastHit(eventPlayer: mod.Player, eventPoint: mod.Vector, ev
     if (!p) return;
 
     // Discard stale results from a prior phase
-    if (p.phase !== phase) return;
+    if (p.phase !== phase) {
+        console.log(`STALE_RAY|rayPhase:${p.phase}|currentPhase:${phase}`);
+        if (p.phase === Phase.QuadTreeSearch) {
+            pendingQuadNodes[bi] = null;
+        } else if (p.phase === Phase.AdaptiveScan) {
+            pendingScanCells[bi] = null;
+        }
+        return;
+    }
 
     const px = mod.XComponentOf(eventPoint);
     const py = mod.YComponentOf(eventPoint);
@@ -510,8 +519,7 @@ export function OnRayCastHit(eventPlayer: mod.Player, eventPoint: mod.Vector, ev
             if (node.halfSize <= QUAD_MIN_SIZE) {
                 scanStack.push({ x: node.x, z: node.z, step: node.halfSize * 2 });
             } else {
-                const size = node.halfSize;
-                const quarter = size / 2;
+                const quarter = node.halfSize / 2;
                 const yawRad = ScanYawDeg * Math.PI / 180.0;
                 const ux = Math.cos(yawRad);
                 const uz = Math.sin(yawRad);
@@ -549,7 +557,15 @@ export function OnRayCastMissed(eventPlayer: mod.Player): void {
     if (!p) return;
 
     // Discard stale results from a prior phase
-    if (p.phase !== phase) return;
+    if (p.phase !== phase) {
+        console.log(`STALE_RAY|rayPhase:${p.phase}|currentPhase:${phase}`);
+        if (p.phase === Phase.QuadTreeSearch) {
+            pendingQuadNodes[bi] = null;
+        } else if (p.phase === Phase.AdaptiveScan) {
+            pendingScanCells[bi] = null;
+        }
+        return;
+    }
 
     console.log(`MISS|S:${p.sx},${p.sy},${p.sz}|E:${p.ex},${p.ey},${p.ez}`);
 
